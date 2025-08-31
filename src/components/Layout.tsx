@@ -77,10 +77,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const adminMenuItems = [
     { path: '/admin', icon: Home, label: 'Главная' },
     { path: '/admin/branches', icon: Building2, label: 'Филиалы' },
-    { path: '/admin/medicines', icon: Package, label: 'Лекарства' },
-    { path: '/admin/medical-devices', icon: Package, label: 'ИМН' },
     { path: '/admin/medicine-categories', icon: FileText, label: 'Категории лекарств' },
     { path: '/admin/medical-devices-categories', icon: FileText, label: 'Категории ИМН' },
+    { path: '/admin/medicines', icon: Package, label: 'Лекарства' },
+    { path: '/admin/medical-devices', icon: Package, label: 'ИМН' },
     { path: '/admin/arrivals', icon: Truck, label: 'Поступления' },
     { path: '/admin/shipments', icon: ArrowLeftRight, label: 'Отправки' },
     { path: '/admin/employees', icon: Users, label: 'Сотрудники' },

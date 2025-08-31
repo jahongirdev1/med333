@@ -34,6 +34,7 @@ const AdminMedicalDevices: React.FC = () => {
     purchase_price: 0,
     quantity: 0
   });
+  const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -56,7 +57,7 @@ const AdminMedicalDevices: React.FC = () => {
     }
   };
 
-  const handleCreateDevice = async () => {
+  const handleSaveDevice = async () => {
     if (!newDevice.name || !newDevice.category_id || !newDevice.purchase_price || !newDevice.quantity) {
       toast({
         title: 'Ошибка',
@@ -67,17 +68,59 @@ const AdminMedicalDevices: React.FC = () => {
     }
     try {
       const payload = { ...newDevice, sell_price: 0 };
-      const result = await apiService.createMedicalDevice(payload);
-      if (result.data) {
-        setDevices([...devices, result.data as Device]);
-        setNewDevice({ name: '', category_id: '', purchase_price: 0, quantity: 0 });
-        setIsCreateDialogOpen(false);
-        toast({ title: 'Успешно', description: 'ИМН создано' });
+      if (editingDevice) {
+        const result = await apiService.updateMedicalDevice(editingDevice.id, payload);
+        if (!result.error) {
+          setDevices(prev => prev.map(d => d.id === editingDevice.id ? { ...payload, id: editingDevice.id } : d));
+          toast({ title: 'Успешно', description: 'ИМН обновлено' });
+        } else {
+          toast({ title: 'Ошибка', description: result.error, variant: 'destructive' });
+        }
       } else {
-        toast({ title: 'Ошибка', description: result.error, variant: 'destructive' });
+        const result = await apiService.createMedicalDevice(payload);
+        if (result.data) {
+          setDevices([...devices, result.data as Device]);
+          toast({ title: 'Успешно', description: 'ИМН создано' });
+        } else {
+          toast({ title: 'Ошибка', description: result.error, variant: 'destructive' });
+        }
       }
+      setNewDevice({ name: '', category_id: '', purchase_price: 0, quantity: 0 });
+      setEditingDevice(null);
+      setIsCreateDialogOpen(false);
     } catch (error) {
-      toast({ title: 'Ошибка', description: 'Не удалось создать ИМН', variant: 'destructive' });
+      toast({
+        title: 'Ошибка',
+        description: editingDevice ? 'Не удалось обновить ИМН' : 'Не удалось создать ИМН',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  const handleEdit = (device: Device) => {
+    setEditingDevice(device);
+    setNewDevice({
+      name: device.name,
+      category_id: device.category_id,
+      purchase_price: device.purchase_price,
+      quantity: device.quantity
+    });
+    setIsCreateDialogOpen(true);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (confirm('Вы уверены, что хотите удалить это ИМН?')) {
+      try {
+        const result = await apiService.deleteMedicalDevice(id);
+        if (!result.error) {
+          setDevices(prev => prev.filter(d => d.id !== id));
+          toast({ title: 'ИМН удалено' });
+        } else {
+          toast({ title: 'Ошибка', description: result.error, variant: 'destructive' });
+        }
+      } catch (error) {
+        toast({ title: 'Ошибка', description: 'Не удалось удалить ИМН', variant: 'destructive' });
+      }
     }
   };
 
@@ -87,12 +130,23 @@ const AdminMedicalDevices: React.FC = () => {
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">Изделия медицинского назначения</h1>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <Dialog
+          open={isCreateDialogOpen}
+          onOpenChange={(open) => {
+            setIsCreateDialogOpen(open);
+            if (!open) {
+              setNewDevice({ name: '', category_id: '', purchase_price: 0, quantity: 0 });
+              setEditingDevice(null);
+            }
+          }}
+        >
           <DialogTrigger asChild>
             <Button><Plus className="h-4 w-4 mr-2" />Добавить ИМН</Button>
           </DialogTrigger>
           <DialogContent>
-            <DialogHeader><DialogTitle>Создать новое ИМН</DialogTitle></DialogHeader>
+            <DialogHeader>
+              <DialogTitle>{editingDevice ? 'Редактировать ИМН' : 'Создать новое ИМН'}</DialogTitle>
+            </DialogHeader>
             <div className="space-y-4">
               <div>
                 <Label>Название</Label>
@@ -111,13 +165,23 @@ const AdminMedicalDevices: React.FC = () => {
               </div>
               <div>
                 <Label>Цена закупки</Label>
-                <Input type="number" value={newDevice.purchase_price} onChange={(e) => setNewDevice({ ...newDevice, purchase_price: Number(e.target.value) })} />
+                <Input
+                  type="number"
+                  value={newDevice.purchase_price}
+                  onChange={(e) => setNewDevice({ ...newDevice, purchase_price: Number(e.target.value) })}
+                />
               </div>
               <div>
                 <Label>Количество</Label>
-                <Input type="number" value={newDevice.quantity} onChange={(e) => setNewDevice({ ...newDevice, quantity: Number(e.target.value) })} />
+                <Input
+                  type="number"
+                  value={newDevice.quantity}
+                  onChange={(e) => setNewDevice({ ...newDevice, quantity: Number(e.target.value) })}
+                />
               </div>
-              <Button onClick={handleCreateDevice} className="w-full">Создать ИМН</Button>
+              <Button onClick={handleSaveDevice} className="w-full">
+                {editingDevice ? 'Обновить ИМН' : 'Создать ИМН'}
+              </Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -127,19 +191,30 @@ const AdminMedicalDevices: React.FC = () => {
         <CardHeader><CardTitle>Список ИМН ({devices.length})</CardTitle></CardHeader>
         <CardContent>
           <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Название</TableHead>
-                  <TableHead>Количество</TableHead>
-                  <TableHead>Цена закупки</TableHead>
-                </TableRow>
-              </TableHeader>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Название</TableHead>
+                <TableHead>Количество</TableHead>
+                <TableHead>Цена закупки</TableHead>
+                <TableHead>Действия</TableHead>
+              </TableRow>
+            </TableHeader>
             <TableBody>
               {devices.map((device) => (
                 <TableRow key={device.id}>
                   <TableCell>{device.name}</TableCell>
                   <TableCell>{device.quantity}</TableCell>
                   <TableCell>{device.purchase_price}₸</TableCell>
+                  <TableCell>
+                    <div className="flex space-x-2">
+                      <Button size="sm" variant="outline" onClick={() => handleEdit(device)}>
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => handleDelete(device.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
