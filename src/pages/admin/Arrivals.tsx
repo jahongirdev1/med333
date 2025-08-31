@@ -1,136 +1,193 @@
-
 import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { apiService } from '@/utils/api';
 import { toast } from '@/hooks/use-toast';
-import { Package, Plus, Trash2, Save } from 'lucide-react';
+import { Package, Plus, Save } from 'lucide-react';
+import ReceiptRowItem, { ReceiptRow } from '@/components/ReceiptRowItem';
 
-interface ArrivalItem {
-  medicineId: string;
-  quantity: number;
-  purchasePrice: number;
-  sellPrice: number;
+interface Item {
+  id: string;
+  name: string;
+  quantity?: number;
+  branch_id?: string;
 }
 
 const Arrivals: React.FC = () => {
-  const [medicines, setMedicines] = useState<any[]>([]);
-  const [arrivals, setArrivals] = useState<ArrivalItem[]>([]);
+  const [medicines, setMedicines] = useState<Item[]>([]);
+  const [devices, setDevices] = useState<Item[]>([]);
+  const [rows, setRows] = useState<ReceiptRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchMedicines();
+    fetchItems();
   }, []);
 
-  const fetchMedicines = async () => {
+  const fetchItems = async () => {
     try {
-      const response = await apiService.getMedicines();
-      if (response.data && Array.isArray(response.data)) {
-        setMedicines(response.data.filter(m => !m.branch_id));
+      setLoading(true);
+      const [medRes, devRes] = await Promise.all([
+        apiService.getMedicines(),
+        apiService.getMedicalDevices(),
+      ]);
+      if (medRes.data && Array.isArray(medRes.data)) {
+        setMedicines((medRes.data as Item[]).filter((m) => !m.branch_id));
       } else {
         setMedicines([]);
       }
+      if (devRes.data && Array.isArray(devRes.data)) {
+        setDevices((devRes.data as Item[]).filter((d) => !d.branch_id));
+      } else {
+        setDevices([]);
+      }
     } catch (error) {
-      console.error('Error fetching medicines:', error);
-      setMedicines([]);
-      toast({ title: 'Ошибка', description: 'Не удалось загрузить лекарства', variant: 'destructive' });
+      console.error('Error fetching items:', error);
+      toast({ title: 'Ошибка', description: 'Не удалось загрузить товары', variant: 'destructive' });
     } finally {
       setLoading(false);
     }
   };
 
-  const addArrival = () => {
-    setArrivals([...arrivals, { medicineId: '', quantity: 1, purchasePrice: 0, sellPrice: 0 }]);
+  const addRow = () => {
+    setRows([
+      ...rows,
+      {
+        id: crypto.randomUUID(),
+        itemType: 'medicine',
+        itemId: null,
+        qty: 1,
+        purchasePrice: 0,
+        sellPrice: 0,
+      },
+    ]);
   };
 
-  const updateArrival = (index: number, field: keyof ArrivalItem, value: string | number) => {
-    const updated = [...arrivals];
-    updated[index] = { ...updated[index], [field]: value };
-    setArrivals(updated);
+  const updateRow = (id: string, field: keyof ReceiptRow, value: unknown) => {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== id) return row;
+        const updated: ReceiptRow = { ...row, [field]: value };
+        if (field === 'itemType') {
+          updated.itemId = null;
+        }
+        return updated;
+      })
+    );
   };
 
-  const removeArrival = (index: number) => {
-    setArrivals(arrivals.filter((_, i) => i !== index));
+  const removeRow = (id: string) => {
+    setRows(rows.filter((row) => row.id !== id));
+  };
+
+  const getAddedQuantity = (itemType: 'medicine' | 'device', itemId: string) => {
+    return rows
+      .filter((r) => r.itemType === itemType && r.itemId === itemId)
+      .reduce((sum, r) => sum + r.qty, 0);
+  };
+
+  const groupRows = (rows: ReceiptRow[]) => {
+    const map = new Map<string, ReceiptRow>();
+    rows.forEach((row) => {
+      if (!row.itemId) return;
+      const key = `${row.itemType}-${row.itemId}-${row.purchasePrice}-${row.sellPrice}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.qty += row.qty;
+      } else {
+        map.set(key, { ...row });
+      }
+    });
+    return Array.from(map.values());
   };
 
   const handleSave = async () => {
-    if (arrivals.length === 0) {
+    if (rows.length === 0) {
       toast({ title: 'Ошибка', description: 'Добавьте поступления', variant: 'destructive' });
       return;
     }
 
-    // Validate arrivals
-    for (const arrival of arrivals) {
-      if (!arrival.medicineId || arrival.quantity <= 0 || arrival.purchasePrice <= 0 || arrival.sellPrice <= 0) {
+    for (const row of rows) {
+      if (!row.itemId || row.qty < 1 || row.purchasePrice < 0 || row.sellPrice < 0) {
         toast({ title: 'Ошибка', description: 'Заполните все поля корректно', variant: 'destructive' });
         return;
       }
     }
 
-    try {
-      console.log('Processing arrivals:', arrivals);
-      
-      // Группируем поступления по лекарствам и суммируем количества
-      const groupedArrivals = arrivals.reduce((acc, arrival) => {
-        const medicine = medicines.find(m => m.id === arrival.medicineId);
-        const key = arrival.medicineId;
-        
-        if (!acc[key]) {
-          acc[key] = {
-            medicine_id: arrival.medicineId,
-            medicine_name: medicine?.name || '',
-            quantity: 0,
-            purchase_price: arrival.purchasePrice,
-            sell_price: arrival.sellPrice
-          };
-        }
-        
-        // Суммируем количества для одного и того же лекарства
-        acc[key].quantity += arrival.quantity;
-        
-        // Обновляем цены (используем последние введенные)
-        acc[key].purchase_price = arrival.purchasePrice;
-        acc[key].sell_price = arrival.sellPrice;
-        
-        return acc;
-      }, {} as Record<string, any>);
+    const grouped = groupRows(rows);
+    const medicineReceipts = grouped
+      .filter((r) => r.itemType === 'medicine')
+      .map((r) => {
+        const item = medicines.find((m) => m.id === r.itemId);
+        return {
+          medicine_id: r.itemId,
+          medicine_name: item?.name || '',
+          quantity: r.qty,
+          purchase_price: r.purchasePrice,
+          sell_price: r.sellPrice,
+        };
+      });
 
-      const arrivalData = Object.values(groupedArrivals);
+    const deviceReceipts = grouped
+      .filter((r) => r.itemType === 'device')
+      .map((r) => {
+        const item = devices.find((d) => d.id === r.itemId);
+        return {
+          device_id: r.itemId,
+          device_name: item?.name || '',
+          quantity: r.qty,
+          purchase_price: r.purchasePrice,
+          sell_price: r.sellPrice,
+        };
+      });
 
-      console.log('Grouped arrival data:', arrivalData);
-      console.log('Отправляем данные поступлений:', arrivalData);
+    let medError = false;
+    let devError = false;
 
-      const response = await apiService.createArrivals(arrivalData);
-      
-      if (!response.error) {
-        setArrivals([]);
-        await fetchMedicines(); // Обновляем список лекарств
-        toast({ 
-          title: 'Поступления сохранены!', 
-          description: `Обработано ${arrivalData.length} уникальных лекарств с общим количеством ${arrivalData.reduce((sum, item) => sum + item.quantity, 0)} шт.` 
-        });
+    if (medicineReceipts.length > 0) {
+      const res = await apiService.createArrivals(medicineReceipts);
+      if (res.error) {
+        medError = true;
       } else {
-        toast({ title: 'Ошибка', description: response.error, variant: 'destructive' });
+        await fetchItems();
       }
-    } catch (error) {
-      console.error('Error saving arrivals:', error);
-      toast({ title: 'Ошибка', description: 'Не удалось сохранить поступления', variant: 'destructive' });
     }
-  };
 
-  // Функция для получения количества добавленного лекарства
-  const getAddedQuantity = (medicineId: string) => {
-    return arrivals
-      .filter(arrival => arrival.medicineId === medicineId)
-      .reduce((sum, arrival) => sum + arrival.quantity, 0);
+    if (deviceReceipts.length > 0) {
+      const res = await apiService.createMedicalDeviceArrivals(deviceReceipts);
+      if (res.error) {
+        devError = true;
+      } else {
+        await fetchItems();
+      }
+    }
+
+    if (!medError && !devError) {
+      setRows([]);
+      toast({
+        title: 'Поступления сохранены!',
+        description: `Обработано ${grouped.length} уникальных товаров с общим количеством ${grouped.reduce(
+          (sum, r) => sum + r.qty,
+          0
+        )} шт.`,
+      });
+    } else {
+      let remaining = rows;
+      if (!medError) {
+        remaining = remaining.filter((r) => r.itemType !== 'medicine');
+      }
+      if (!devError) {
+        remaining = remaining.filter((r) => r.itemType !== 'device');
+      }
+      setRows(remaining);
+      toast({
+        title: 'Ошибка',
+        description: medError && devError
+          ? 'Не удалось сохранить поступления'
+          : medError
+            ? 'Не удалось сохранить поступления лекарств'
+            : 'Не удалось сохранить поступления ИМН',
+        variant: 'destructive',
+      });
+    }
   };
 
   if (loading) {
@@ -141,97 +198,31 @@ const Arrivals: React.FC = () => {
     <div>
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900">Поступления на склад</h1>
-        <p className="text-gray-600 mt-2">Добавление поступивших лекарств на главный склад</p>
+        <p className="text-gray-600 mt-2">Добавление поступивших товаров на главный склад</p>
       </div>
 
       <div className="bg-white rounded-lg shadow p-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-semibold">Добавить поступления</h2>
-          <Button onClick={addArrival} className="flex items-center">
+          <Button onClick={addRow} className="flex items-center">
             <Plus className="h-4 w-4 mr-2" />
             Добавить поступление
           </Button>
         </div>
 
-        {arrivals.length > 0 ? (
+        {rows.length > 0 ? (
           <div className="space-y-4 mb-6">
-            {arrivals.map((arrival, index) => {
-              const medicine = medicines.find(m => m.id === arrival.medicineId);
-              const addedQuantity = getAddedQuantity(arrival.medicineId);
-              
-              return (
-                <div key={index} className="grid grid-cols-1 md:grid-cols-5 gap-4 p-4 bg-gray-50 rounded-lg">
-                  <div>
-                    <Label>Лекарство</Label>
-                    <Select 
-                      value={arrival.medicineId} 
-                      onValueChange={(value) => updateArrival(index, 'medicineId', value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Выберите лекарство" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {medicines.map((medicine) => {
-                          const willAdd = getAddedQuantity(medicine.id);
-                          return (
-                            <SelectItem key={medicine.id} value={medicine.id}>
-                              {medicine.name} (текущее: {medicine.quantity || 0}{willAdd > 0 ? ` + ${willAdd}` : ''} шт.)
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
-                    {medicine && addedQuantity > 0 && (
-                      <p className="text-xs text-blue-600 mt-1">
-                        Добавляется всего: {addedQuantity} шт.
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <Label>Количество</Label>
-                    <Input
-                      type="number"
-                      min="1"
-                      value={arrival.quantity}
-                      onChange={(e) => updateArrival(index, 'quantity', Number(e.target.value))}
-                      placeholder="Количество"
-                    />
-                  </div>
-                  <div>
-                    <Label>Цена приходная (₸)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={arrival.purchasePrice}
-                      onChange={(e) => updateArrival(index, 'purchasePrice', Number(e.target.value))}
-                      placeholder="0.00"
-                    />
-                  </div>
-                  <div>
-                    <Label>Цена продажная (₸)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={arrival.sellPrice}
-                      onChange={(e) => updateArrival(index, 'sellPrice', Number(e.target.value))}
-                      placeholder="0.00"
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <Button 
-                      variant="destructive" 
-                      onClick={() => removeArrival(index)}
-                      className="w-full"
-                    >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Удалить
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
+            {rows.map((row) => (
+              <ReceiptRowItem
+                key={row.id}
+                row={row}
+                medicines={medicines}
+                devices={devices}
+                onUpdate={updateRow}
+                onRemove={removeRow}
+                getAddedQuantity={getAddedQuantity}
+              />
+            ))}
           </div>
         ) : (
           <div className="text-center py-8 text-gray-500">
@@ -240,37 +231,34 @@ const Arrivals: React.FC = () => {
           </div>
         )}
 
-        {arrivals.length > 0 && (
+        {rows.length > 0 && (
           <div className="mb-4 p-4 bg-blue-50 rounded-lg">
             <p className="text-sm text-blue-800">
-              <strong>Примечание:</strong> Если выбрано одно и то же лекарство несколько раз, 
+              <strong>Примечание:</strong> Если выбрано одно и то же товар несколько раз,
               количества будут автоматически суммированы при сохранении.
             </p>
-            
-            {/* Показываем итоговую группировку */}
+
             {(() => {
-              const grouped = arrivals.reduce((acc, arrival) => {
-                const medicine = medicines.find(m => m.id === arrival.medicineId);
-                const key = arrival.medicineId;
-                
-                if (medicine && !acc[key]) {
-                  acc[key] = {
-                    name: medicine.name,
-                    totalQuantity: 0,
-                    count: 0
-                  };
+              const grouped = rows.reduce((acc, row) => {
+                if (!row.itemId) return acc;
+                const items = row.itemType === 'medicine' ? medicines : devices;
+                const item = items.find((i) => i.id === row.itemId);
+                const key = `${row.itemType}-${row.itemId}`;
+
+                if (item && !acc[key]) {
+                  acc[key] = { name: item.name, totalQuantity: 0, count: 0 };
                 }
-                
+
                 if (acc[key]) {
-                  acc[key].totalQuantity += arrival.quantity;
+                  acc[key].totalQuantity += row.qty;
                   acc[key].count += 1;
                 }
-                
+
                 return acc;
               }, {} as Record<string, { name: string; totalQuantity: number; count: number }>);
 
-              const groupedItems = Object.values(grouped).filter(item => item.totalQuantity > 0);
-              
+              const groupedItems = Object.values(grouped).filter((item) => item.totalQuantity > 0);
+
               if (groupedItems.length > 0) {
                 return (
                   <div className="mt-3">
@@ -291,7 +279,7 @@ const Arrivals: React.FC = () => {
           </div>
         )}
 
-        <Button onClick={handleSave} disabled={arrivals.length === 0}>
+        <Button onClick={handleSave} disabled={rows.length === 0}>
           <Save className="h-4 w-4 mr-2" />
           Сохранить поступления
         </Button>
@@ -301,3 +289,4 @@ const Arrivals: React.FC = () => {
 };
 
 export default Arrivals;
+
