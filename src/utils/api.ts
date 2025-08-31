@@ -197,19 +197,13 @@ class ApiService {
   }
 
   // Arrivals
-  async getArrivals() {
-    return this.request<any[]>('/arrivals');
+  async getArrivals(itemType?: string) {
+    const params = itemType ? `?item_type=${itemType}` : '';
+    return this.request<any[]>(`/arrivals${params}`);
   }
 
   async createArrivals(arrivals: any[]) {
     return this.request<any>('/arrivals', {
-      method: 'POST',
-      body: JSON.stringify({ arrivals }),
-    });
-  }
-
-  async createMedicalDeviceArrivals(arrivals: Record<string, unknown>[]) {
-    return this.request<any>('/medical_device_arrivals', {
       method: 'POST',
       body: JSON.stringify({ arrivals }),
     });

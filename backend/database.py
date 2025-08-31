@@ -100,10 +100,11 @@ class DispensingItem(Base):
 
 class Arrival(Base):
     __tablename__ = "arrivals"
-    
+
     id = Column(String, primary_key=True)
-    medicine_id = Column(String, nullable=False)
-    medicine_name = Column(String, nullable=False)
+    item_type = Column(String, nullable=False)  # 'medicine' or 'medical_device'
+    item_id = Column(String, nullable=False)
+    item_name = Column(String, nullable=False)
     quantity = Column(Integer, nullable=False)
     purchase_price = Column(Float, nullable=False)
     sell_price = Column(Float, nullable=False)
