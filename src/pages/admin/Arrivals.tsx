@@ -113,55 +113,23 @@ const Arrivals: React.FC = () => {
     }
 
     const grouped = groupRows(rows);
-    const medicineReceipts = grouped
-      .filter((r) => r.itemType === 'medicine')
-      .map((r) => {
-        const item = medicines.find((m) => m.id === r.itemId);
-        return {
-          medicine_id: r.itemId,
-          medicine_name: item?.name || '',
-          quantity: r.qty,
-          purchase_price: r.purchasePrice,
-          sell_price: r.sellPrice,
-        };
-      });
+    const arrivalsPayload = grouped.map((r) => {
+      const items = r.itemType === 'medicine' ? medicines : devices;
+      const item = items.find((i) => i.id === r.itemId);
+      return {
+        item_type: r.itemType === 'medicine' ? 'medicine' : 'medical_device',
+        item_id: r.itemId,
+        item_name: item?.name || '',
+        quantity: r.qty,
+        purchase_price: r.purchasePrice,
+        sell_price: r.sellPrice,
+      };
+    });
 
-    const deviceReceipts = grouped
-      .filter((r) => r.itemType === 'device')
-      .map((r) => {
-        const item = devices.find((d) => d.id === r.itemId);
-        return {
-          device_id: r.itemId,
-          device_name: item?.name || '',
-          quantity: r.qty,
-          purchase_price: r.purchasePrice,
-          sell_price: r.sellPrice,
-        };
-      });
-
-    let medError = false;
-    let devError = false;
-
-    if (medicineReceipts.length > 0) {
-      const res = await apiService.createArrivals(medicineReceipts);
-      if (res.error) {
-        medError = true;
-      } else {
-        await fetchItems();
-      }
-    }
-
-    if (deviceReceipts.length > 0) {
-      const res = await apiService.createMedicalDeviceArrivals(deviceReceipts);
-      if (res.error) {
-        devError = true;
-      } else {
-        await fetchItems();
-      }
-    }
-
-    if (!medError && !devError) {
+    const res = await apiService.createArrivals(arrivalsPayload);
+    if (!res.error) {
       setRows([]);
+      await fetchItems();
       toast({
         title: 'Поступления сохранены!',
         description: `Обработано ${grouped.length} уникальных товаров с общим количеством ${grouped.reduce(
@@ -170,21 +138,9 @@ const Arrivals: React.FC = () => {
         )} шт.`,
       });
     } else {
-      let remaining = rows;
-      if (!medError) {
-        remaining = remaining.filter((r) => r.itemType !== 'medicine');
-      }
-      if (!devError) {
-        remaining = remaining.filter((r) => r.itemType !== 'device');
-      }
-      setRows(remaining);
       toast({
         title: 'Ошибка',
-        description: medError && devError
-          ? 'Не удалось сохранить поступления'
-          : medError
-            ? 'Не удалось сохранить поступления лекарств'
-            : 'Не удалось сохранить поступления ИМН',
+        description: 'Не удалось сохранить поступления',
         variant: 'destructive',
       });
     }

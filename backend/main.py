@@ -991,35 +991,42 @@ async def create_dispensing_record(request: dict, db: Session = Depends(get_db))
 # Arrival endpoints
 @app.get("/arrivals")
 async def get_arrivals(db: Session = Depends(get_db)):
+    """Return list of all arrivals for both medicines and medical devices."""
     arrivals = db.query(DBArrival).all()
     return {"data": [Arrival.model_validate(arrival) for arrival in arrivals]}
 
 @app.post("/arrivals")
 async def create_arrivals(batch: BatchArrivalCreate, db: Session = Depends(get_db)):
+    """Create arrivals for medicines and medical devices in one request."""
     try:
         for arrival_data in batch.arrivals:
-            # Create arrival record
             db_arrival = DBArrival(
                 id=str(uuid.uuid4()),
-                medicine_id=arrival_data.medicine_id,
-                medicine_name=arrival_data.medicine_name,
+                item_type=arrival_data.item_type,
+                item_id=arrival_data.item_id,
+                item_name=arrival_data.item_name,
                 quantity=arrival_data.quantity,
                 purchase_price=arrival_data.purchase_price,
-                sell_price=arrival_data.sell_price
+                sell_price=arrival_data.sell_price,
             )
             db.add(db_arrival)
-            
-            # Update medicine quantity in main warehouse
-            medicine = db.query(DBMedicine).filter(
-                DBMedicine.id == arrival_data.medicine_id,
-                DBMedicine.branch_id.is_(None)
-            ).first()
-            
-            if medicine:
-                medicine.quantity += arrival_data.quantity
-                medicine.purchase_price = arrival_data.purchase_price
-                medicine.sell_price = arrival_data.sell_price
-        
+
+            if arrival_data.item_type == "medicine":
+                item = db.query(DBMedicine).filter(
+                    DBMedicine.id == arrival_data.item_id,
+                    DBMedicine.branch_id.is_(None),
+                ).first()
+            else:
+                item = db.query(DBMedicalDevice).filter(
+                    DBMedicalDevice.id == arrival_data.item_id,
+                    DBMedicalDevice.branch_id.is_(None),
+                ).first()
+
+            if item:
+                item.quantity += arrival_data.quantity
+                item.purchase_price = arrival_data.purchase_price
+                item.sell_price = arrival_data.sell_price
+
         db.commit()
         return {"message": "Arrivals created successfully"}
     except Exception as e:
@@ -1085,16 +1092,17 @@ async def generate_report(request: ReportRequest, db: Session = Depends(get_db))
                 query = query.filter(DBArrival.date >= request.date_from)
             if request.date_to:
                 query = query.filter(DBArrival.date <= request.date_to)
-            
+
             arrivals = query.all()
             for arrival in arrivals:
                 report_data.append({
                     "id": arrival.id,
-                    "medicine_name": arrival.medicine_name,
+                    "item_type": arrival.item_type,
+                    "item_name": arrival.item_name,
                     "quantity": arrival.quantity,
                     "purchase_price": arrival.purchase_price,
                     "sell_price": arrival.sell_price,
-                    "date": arrival.date.isoformat()
+                    "date": arrival.date.isoformat(),
                 })
         
         elif request.type == "transfers":

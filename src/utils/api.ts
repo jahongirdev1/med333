@@ -202,17 +202,18 @@ class ApiService {
   }
 
   async createArrivals(arrivals: any[]) {
+    // Unified arrivals endpoint supports both medicines and medical devices.
     return this.request<any>('/arrivals', {
       method: 'POST',
       body: JSON.stringify({ arrivals }),
     });
   }
 
+  // Deprecated: kept for backward compatibility. Simply proxies to createArrivals
+  // with item_type='medical_device' for each entry.
   async createMedicalDeviceArrivals(arrivals: Record<string, unknown>[]) {
-    return this.request<any>('/medical_device_arrivals', {
-      method: 'POST',
-      body: JSON.stringify({ arrivals }),
-    });
+    const payload = arrivals.map((a) => ({ item_type: 'medical_device', ...a }));
+    return this.createArrivals(payload);
   }
 
   // Medical Device Categories (proxy to categories API)
