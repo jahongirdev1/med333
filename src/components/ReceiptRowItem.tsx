@@ -13,11 +13,14 @@ import { Trash2 } from 'lucide-react';
 
 export interface ReceiptRow {
   id: string;
-  itemType: 'medicine' | 'device';
+  itemType: 'medicine' | 'medical_device';
   itemId: string | null;
   qty: number;
   purchasePrice: number;
   sellPrice: number;
+  batchNumber?: string | null;
+  expiryDate?: string | null;
+  uom?: string | null;
 }
 
 interface Item {
@@ -32,7 +35,7 @@ interface ReceiptRowItemProps {
   devices: Item[];
   onUpdate: (id: string, field: keyof ReceiptRow, value: unknown) => void;
   onRemove: (id: string) => void;
-  getAddedQuantity: (itemType: 'medicine' | 'device', itemId: string) => number;
+  getAddedQuantity: (itemType: 'medicine' | 'medical_device', itemId: string) => number;
 }
 
 const ReceiptRowItem: React.FC<ReceiptRowItemProps> = ({
@@ -59,7 +62,7 @@ const ReceiptRowItem: React.FC<ReceiptRowItemProps> = ({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="medicine">Лекарство</SelectItem>
-            <SelectItem value="device">ИМН</SelectItem>
+            <SelectItem value="medical_device">ИМН</SelectItem>
           </SelectContent>
         </Select>
       </div>
