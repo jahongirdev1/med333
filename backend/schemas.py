@@ -163,14 +163,8 @@ class Dispensing(DispensingBase):
 
 # Arrival schemas
 class ArrivalBase(BaseModel):
-    """Base schema for arrival/receipt items.
-
-    item_type specifies whether the item is a medicine or a medical device.
-    """
-
-    item_type: str  # 'medicine' or 'medical_device'
-    item_id: str
-    item_name: str
+    medicine_id: str
+    medicine_name: str
     quantity: int
     purchase_price: float
     sell_price: float
