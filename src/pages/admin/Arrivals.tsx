@@ -1,48 +1,60 @@
 import React, { useEffect, useState } from 'react';
+import { Package, Plus, Save } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import ReceiptRowItem, { ReceiptRow } from '@/components/ReceiptRowItem';
 import { apiService } from '@/utils/api';
+import { toast } from '@/hooks/use-toast';
+import { uid } from '@/shared/utils/uid';
 
-type Tab = 'medicine' | 'medical_device';
-
-interface ArrivalRow {
-  id: string;
-  itemId: string;
-  itemName: string;
-  quantity: number;
-  purchasePrice: number;
-  sellPrice: number;
-}
+export type ItemType = 'medicine' | 'medical_device';
 
 const AdminArrivals: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<Tab>('medicine');
+  const [activeTab, setActiveTab] = useState<ItemType>('medicine');
   const [arrivals, setArrivals] = useState<any[]>([]);
-  const [rows, setRows] = useState<ArrivalRow[]>([]);
+  const [rows, setRows] = useState<ReceiptRow[]>([]);
+  const [medicines, setMedicines] = useState<any[]>([]);
+  const [devices, setDevices] = useState<any[]>([]);
+
+  const visibleRows = rows.filter((r) => r.itemType === activeTab);
+
+  useEffect(() => {
+    fetchCatalogs();
+  }, []);
 
   useEffect(() => {
     fetchArrivals();
   }, [activeTab]);
 
-  const fetchArrivals = async () => {
-    const res = await apiService.getArrivals(activeTab);
-    if (res.data) {
-      setArrivals(res.data);
-    }
+  const fetchCatalogs = async () => {
+    const [medRes, devRes] = await Promise.all([
+      apiService.getMedicines(),
+      apiService.getMedicalDevices(),
+    ]);
+    if (medRes.data) setMedicines(medRes.data);
+    if (devRes.data) setDevices(devRes.data);
   };
 
-  const addRow = () => {
+  const fetchArrivals = async () => {
+    const res = await apiService.getArrivals(activeTab);
+    if (res.data) setArrivals(res.data);
+  };
+
+  const addRow = (type: ItemType) => {
     setRows([
       ...rows,
       {
-        id: crypto.randomUUID(),
-        itemId: '',
-        itemName: '',
-        quantity: 0,
+        id: uid(),
+        itemType: type,
+        itemId: null,
+        qty: 1,
         purchasePrice: 0,
         sellPrice: 0,
       },
     ]);
   };
 
-  const updateRow = (id: string, field: keyof ArrivalRow, value: string | number) => {
+  const updateRow = (id: string, field: keyof ReceiptRow, value: unknown) => {
     setRows(rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   };
 
@@ -50,31 +62,63 @@ const AdminArrivals: React.FC = () => {
     setRows(rows.filter((r) => r.id !== id));
   };
 
+  const getAddedQuantity = (itemType: ItemType, itemId: string) =>
+    rows
+      .filter((r) => r.itemType === itemType && r.itemId === itemId)
+      .reduce((sum, r) => sum + r.qty, 0);
+
+  const resolveNameByType = (itemType: ItemType, itemId: string | null) => {
+    if (!itemId) return '';
+    const list = itemType === 'medicine' ? medicines : devices;
+    return list.find((i: any) => i.id === itemId)?.name || '';
+  };
+
+  const validateRows = () => {
+    for (const r of rows) {
+      if (!r.itemId) {
+        toast({ title: 'Ошибка', description: 'Выберите товар для всех строк', variant: 'destructive' });
+        return false;
+      }
+      if (r.qty <= 0) {
+        toast({ title: 'Ошибка', description: 'Количество должно быть больше 0', variant: 'destructive' });
+        return false;
+      }
+      if (r.purchasePrice < 0 || r.sellPrice < 0) {
+        toast({ title: 'Ошибка', description: 'Цены не могут быть отрицательными', variant: 'destructive' });
+        return false;
+      }
+    }
+    return true;
+  };
+
   const saveRows = async () => {
-    const payload = rows.map((r) => ({
-      item_type: activeTab,
-      item_id: r.itemId,
-      item_name: r.itemName,
-      quantity: r.quantity,
-      purchase_price: r.purchasePrice,
-      sell_price: r.sellPrice,
-    }));
+    if (!validateRows()) return;
+    const payload = {
+      arrivals: rows.map((r) => ({
+        item_type: r.itemType,
+        item_id: r.itemId,
+        item_name: resolveNameByType(r.itemType, r.itemId),
+        quantity: r.qty,
+        purchase_price: r.purchasePrice,
+        sell_price: r.sellPrice,
+      })),
+    };
     const res = await apiService.createArrivals(payload);
     if (!res.error) {
       setRows([]);
       fetchArrivals();
+    } else {
+      toast({ title: 'Ошибка', description: res.error, variant: 'destructive' });
     }
   };
 
   return (
     <div>
-      <div style={{ marginBottom: '1rem' }}>
-        <button onClick={() => setActiveTab('medicine')} disabled={activeTab === 'medicine'}>
-          Medicines
-        </button>
-        <button onClick={() => setActiveTab('medical_device')} disabled={activeTab === 'medical_device'}>
-          Medical Devices
-        </button>
+      <div className="mb-4">
+        <ToggleGroup type="single" value={activeTab} onValueChange={(v) => v && setActiveTab(v as ItemType)}>
+          <ToggleGroupItem value="medicine">Лекарства</ToggleGroupItem>
+          <ToggleGroupItem value="medical_device">ИМН</ToggleGroupItem>
+        </ToggleGroup>
       </div>
 
       <h2>Arrivals</h2>
@@ -86,45 +130,38 @@ const AdminArrivals: React.FC = () => {
         ))}
       </ul>
 
-      <h2>Add Arrivals</h2>
-      {rows.map((row) => (
-        <div key={row.id} style={{ marginBottom: '0.5rem' }}>
-          <input
-            placeholder="Item ID"
-            value={row.itemId}
-            onChange={(e) => updateRow(row.id, 'itemId', e.target.value)}
-          />
-          <input
-            placeholder="Item Name"
-            value={row.itemName}
-            onChange={(e) => updateRow(row.id, 'itemName', e.target.value)}
-          />
-          <input
-            type="number"
-            placeholder="Quantity"
-            value={row.quantity}
-            onChange={(e) => updateRow(row.id, 'quantity', Number(e.target.value))}
-          />
-          <input
-            type="number"
-            placeholder="Purchase Price"
-            value={row.purchasePrice}
-            onChange={(e) => updateRow(row.id, 'purchasePrice', Number(e.target.value))}
-          />
-          <input
-            type="number"
-            placeholder="Sell Price"
-            value={row.sellPrice}
-            onChange={(e) => updateRow(row.id, 'sellPrice', Number(e.target.value))}
-          />
-          <button onClick={() => removeRow(row.id)}>Remove</button>
+      <h2>Добавить поступление</h2>
+      {visibleRows.length > 0 ? (
+        <div className="space-y-4 mb-6">
+          {visibleRows.map((row) => (
+            <ReceiptRowItem
+              key={row.id}
+              row={row}
+              medicines={medicines}
+              devices={devices}
+              onUpdate={updateRow}
+              onRemove={removeRow}
+              getAddedQuantity={getAddedQuantity}
+            />
+          ))}
         </div>
-      ))}
+      ) : (
+        <div className="text-center py-8 text-gray-500">
+          <Package className="h-16 w-16 mx-auto mb-4 text-gray-400" />
+          <p>Нажмите "Добавить поступление" чтобы начать</p>
+        </div>
+      )}
 
-      <button onClick={addRow}>Add Row</button>
-      <button onClick={saveRows} disabled={rows.length === 0} style={{ marginLeft: '0.5rem' }}>
-        Save
-      </button>
+      <div className="flex gap-4">
+        <Button onClick={() => addRow(activeTab)} className="flex items-center">
+          <Plus className="h-4 w-4 mr-2" />
+          Добавить поступление
+        </Button>
+        <Button onClick={saveRows} disabled={rows.length === 0} className="flex items-center">
+          <Save className="h-4 w-4 mr-2" />
+          Сохранить поступления
+        </Button>
+      </div>
     </div>
   );
 };

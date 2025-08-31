@@ -202,10 +202,10 @@ class ApiService {
     return this.request<any[]>(`/arrivals${params}`);
   }
 
-  async createArrivals(arrivals: any[]) {
+  async createArrivals(payload: { arrivals: any[] }) {
     return this.request<any>('/arrivals', {
       method: 'POST',
-      body: JSON.stringify({ arrivals }),
+      body: JSON.stringify(payload),
     });
   }
 
