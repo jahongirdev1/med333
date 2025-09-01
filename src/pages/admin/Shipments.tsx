@@ -11,6 +11,46 @@ import { toast } from "@/hooks/use-toast";
 import { apiService } from "@/utils/api";
 import { Loader2, Plus, Truck, Package, AlertTriangle, RefreshCw, X, CheckCircle } from "lucide-react";
 
+interface QtyInputProps {
+  value: number;
+  onCommit: (val: number) => void;
+  max?: number;
+}
+
+const QtyInput: React.FC<QtyInputProps> = ({ value, onCommit, max }) => {
+  const [qtyText, setQtyText] = React.useState<string>(String(value ?? 0));
+
+  React.useEffect(() => {
+    setQtyText(String(value ?? 0));
+  }, [value]);
+
+  const onQtyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value;
+    if (/^\d*$/.test(v)) setQtyText(v);
+  };
+
+  const onQtyBlur = () => {
+    let n = parseInt(qtyText || '0', 10);
+    if (!Number.isFinite(n) || n < 1) n = 1;
+    if (typeof max === 'number' && Number.isFinite(max)) n = Math.min(n, max);
+    onCommit(n);
+    setQtyText(String(n));
+  };
+
+  return (
+    <Input
+      className="w-full"
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      value={qtyText}
+      onChange={onQtyChange}
+      onBlur={onQtyBlur}
+      placeholder="0"
+    />
+  );
+};
+
 const Shipments = () => {
   const [shipments, setShipments] = useState<any[]>([]);
   const [medicines, setMedicines] = useState<any[]>([]);
@@ -301,12 +341,10 @@ const Shipments = () => {
                       </div>
                       <div className="w-32">
                         <Label>Количество</Label>
-                        <Input
-                          type="number"
-                          min="1"
+                        <QtyInput
                           value={medicine.quantity}
-                          onChange={(e) => updateMedicineItem(index, 'quantity', parseInt(e.target.value) || 0)}
-                          placeholder="0"
+                          onCommit={(n) => updateMedicineItem(index, 'quantity', n)}
+                          max={medicines.find((med) => med.id === medicine.medicine_id)?.quantity}
                         />
                       </div>
                       <Button 
@@ -352,12 +390,10 @@ const Shipments = () => {
                       </div>
                       <div className="w-32">
                         <Label>Количество</Label>
-                        <Input
-                          type="number"
-                          min="1"
+                        <QtyInput
                           value={device.quantity}
-                          onChange={(e) => updateDeviceItem(index, 'quantity', parseInt(e.target.value) || 0)}
-                          placeholder="0"
+                          onCommit={(n) => updateDeviceItem(index, 'quantity', n)}
+                          max={devices.find((dev) => dev.id === device.device_id)?.quantity}
                         />
                       </div>
                       <Button 
