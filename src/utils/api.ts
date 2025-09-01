@@ -198,9 +198,18 @@ class ApiService {
 
   // Arrivals
   // GET arrivals (optional filter by type)
-  getArrivals(itemType?: string) {
+  async getArrivals(itemType?: string) {
     const params = itemType ? `?item_type=${itemType}` : '';
-    return this.request<any[]>(`/arrivals${params}`);
+    const res = await this.request<any>(`/arrivals${params}`);
+
+    // Normalize to array
+    if (Array.isArray(res?.data)) {
+      return { data: res.data };
+    }
+    if (Array.isArray(res?.data?.data)) {
+      return { data: res.data.data };
+    }
+    return { data: [] as any[] };
   }
 
   // POST arrivals
