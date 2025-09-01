@@ -106,8 +106,6 @@ class Arrival(Base):
     item_id = Column(String, nullable=False)
     item_name = Column(String, nullable=False)
     quantity = Column(Integer, nullable=False)
-    purchase_price = Column(Float, nullable=False)
-    sell_price = Column(Float, nullable=False)
     date = Column(DateTime, default=datetime.utcnow)
 
 class Category(Base):
