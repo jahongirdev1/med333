@@ -9,12 +9,19 @@ import { uid } from '@/shared/utils/uid';
 
 export type ItemType = 'medicine' | 'medical_device';
 
+interface CatalogItem {
+  id: string;
+  name: string;
+  quantity?: number;
+  branch_id?: string | null;
+}
+
 const AdminArrivals: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ItemType>('medicine');
   const [arrivals, setArrivals] = useState<any[]>([]);
   const [rows, setRows] = useState<ReceiptRow[]>([]);
-  const [medicines, setMedicines] = useState<any[]>([]);
-  const [devices, setDevices] = useState<any[]>([]);
+  const [medicines, setMedicines] = useState<CatalogItem[]>([]);
+  const [devices, setDevices] = useState<CatalogItem[]>([]);
 
   const visibleRows = rows.filter((r) => r.itemType === activeTab);
 
@@ -27,12 +34,23 @@ const AdminArrivals: React.FC = () => {
   }, [activeTab]);
 
   const fetchCatalogs = async () => {
-    const [medRes, devRes] = await Promise.all([
-      apiService.getMedicines(),
-      apiService.getMedicalDevices(),
-    ]);
-    if (medRes.data) setMedicines(medRes.data);
-    if (devRes.data) setDevices(devRes.data);
+    const med = await apiService.getMedicines();
+    setMedicines(
+      Array.isArray(med?.data)
+        ? med.data.filter((i: CatalogItem) => !i.branch_id)
+        : Array.isArray(med)
+          ? (med as CatalogItem[]).filter((i) => !i.branch_id)
+          : []
+    );
+
+    const dev = await apiService.getMedicalDevices();
+    setDevices(
+      Array.isArray(dev?.data)
+        ? dev.data.filter((i: CatalogItem) => !i.branch_id)
+        : Array.isArray(dev)
+          ? (dev as CatalogItem[]).filter((i) => !i.branch_id)
+          : []
+    );
   };
 
   const fetchArrivals = async () => {
@@ -40,12 +58,12 @@ const AdminArrivals: React.FC = () => {
     setArrivals(res.data);
   };
 
-  const addRow = (type: ItemType) => {
-    setRows([
-      ...rows,
+  const addRow = () => {
+    setRows((prev) => [
+      ...prev,
       {
         id: uid(),
-        itemType: type,
+        itemType: activeTab,
         itemId: null,
         itemName: '',
         qty: 1,
@@ -60,11 +78,6 @@ const AdminArrivals: React.FC = () => {
   const removeRow = (id: string) => {
     setRows(rows.filter((r) => r.id !== id));
   };
-
-  const getAddedQuantity = (itemType: ItemType, itemId: string) =>
-    rows
-      .filter((r) => r.itemType === itemType && r.itemId === itemId)
-      .reduce((sum, r) => sum + r.qty, 0);
 
   const validateRows = () => {
     for (const r of rows) {
@@ -98,6 +111,9 @@ const AdminArrivals: React.FC = () => {
     }
   };
 
+  const isSaveDisabled =
+    visibleRows.length === 0 || visibleRows.some((r) => !r.itemId || r.qty <= 0);
+
   return (
     <div>
       <div className="mb-4">
@@ -119,18 +135,18 @@ const AdminArrivals: React.FC = () => {
       <h2>Добавить поступление</h2>
       {visibleRows.length > 0 ? (
         <div className="space-y-4 mb-6">
-          {visibleRows.map((row) => (
-            <ReceiptRowItem
-              key={row.id}
-              row={row}
-              medicines={medicines}
-              devices={devices}
-              onUpdate={updateRow}
-              onRemove={removeRow}
-              getAddedQuantity={getAddedQuantity}
-            />
-          ))}
-        </div>
+            {visibleRows.map((row) => (
+              <ReceiptRowItem
+                key={row.id}
+                row={row}
+                medicines={medicines}
+                devices={devices}
+                onUpdate={updateRow}
+                onRemove={removeRow}
+                activeTab={activeTab}
+              />
+            ))}
+          </div>
       ) : (
         <div className="text-center py-8 text-gray-500">
           <Package className="h-16 w-16 mx-auto mb-4 text-gray-400" />
@@ -139,11 +155,11 @@ const AdminArrivals: React.FC = () => {
       )}
 
       <div className="flex gap-4">
-        <Button onClick={() => addRow(activeTab)} className="flex items-center">
+        <Button onClick={addRow} className="flex items-center">
           <Plus className="h-4 w-4 mr-2" />
           Добавить поступление
         </Button>
-        <Button onClick={saveRows} disabled={rows.length === 0} className="flex items-center">
+        <Button onClick={saveRows} disabled={isSaveDisabled} className="flex items-center">
           <Save className="h-4 w-4 mr-2" />
           Сохранить поступления
         </Button>
