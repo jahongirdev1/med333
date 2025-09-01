@@ -2,21 +2,41 @@
 import React, { useState, useEffect } from 'react';
 import { storage } from '@/utils/storage';
 import { apiService } from '@/utils/api';
-import { Package, Users, UserCheck, ArrowLeftRight } from 'lucide-react';
+import { Package, Users, UserCheck, ArrowLeftRight, X } from 'lucide-react';
+import { Alert, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { useNavigate } from 'react-router-dom';
 
 const BranchDashboard: React.FC = () => {
   const currentUser = storage.getCurrentUser();
   const branchId = currentUser?.branchId;
-  
+
   const [medicines, setMedicines] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
   const [dispensings, setDispensings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [showBanner, setShowBanner] = useState(true);
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchData();
+    void fetchPendingArrivals();
   }, [branchId]);
+
+  const fetchPendingArrivals = async () => {
+    try {
+      const res = (await apiService.getShipments?.(branchId)) ?? (await apiService.getArrivals?.());
+      const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      const pending = list.filter((x: any) =>
+        x.status === 'pending' || x.status === 'new' || x.is_pending === true
+      );
+      setPendingCount(pending.length);
+    } catch (error) {
+      console.error('Error fetching pending arrivals:', error);
+    }
+  };
 
   const fetchData = async () => {
     try {
@@ -78,6 +98,18 @@ const BranchDashboard: React.FC = () => {
         <h1 className="text-3xl font-bold text-gray-900">{currentUser?.branchName}</h1>
         <p className="text-gray-600 mt-2">Панель управления филиалом</p>
       </div>
+      {pendingCount > 0 && showBanner && (
+        <Alert className="mb-8 flex items-center justify-between">
+          <AlertTitle>Есть новые поступления: {pendingCount}</AlertTitle>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => navigate('/branch/arrivals')}>Перейти к поступлениям</Button>
+            <Button size="sm" variant="outline" onClick={fetchPendingArrivals}>Обновить</Button>
+            <Button size="sm" variant="ghost" onClick={() => setShowBanner(false)}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </Alert>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         {stats.map((stat, index) => {
