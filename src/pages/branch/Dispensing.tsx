@@ -117,17 +117,21 @@ const Dispensing: React.FC = () => {
       return;
     }
 
-    const employee = employees.find((e) => e.id === selectedEmployee);
-    const patient = patients.find((p) => p.id === selectedPatient);
+    // Build items for API: only positive quantities
+    const items = [
+      ...selectedMedicines
+        .filter((r) => r.medicineId && r.quantity > 0)
+        .map((r) => ({ type: 'medicine' as const, item_id: r.medicineId, quantity: r.quantity })),
+      ...selectedDevices
+        .filter((r) => r.deviceId && r.quantity > 0)
+        .map((r) => ({ type: 'medical_device' as const, item_id: r.deviceId, quantity: r.quantity })),
+    ];
 
     const payload = {
       patient_id: selectedPatient,
-      patient_name: patient ? `${patient.first_name} ${patient.last_name}` : '',
       employee_id: selectedEmployee,
-      employee_name: employee ? `${employee.first_name} ${employee.last_name}` : '',
-      branch_id: branchId,
-      medicines: medicinesPayload,
-      medical_devices: devicesPayload,
+      branch_id: branchId!,
+      items,
     };
 
     try {
