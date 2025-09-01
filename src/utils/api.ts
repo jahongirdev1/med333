@@ -413,11 +413,26 @@ class ApiService {
   }
 
   // Create dispensing record
-  async createDispensingRecord(data: any) {
-    return this.request('/dispensing', {
+  async createDispensingRecord(body: {
+    patient_id: string;
+    patient_name: string;
+    employee_id: string;
+    employee_name: string;
+    branch_id: string;
+    medicines: { id: string; name: string; quantity: number }[];
+    medical_devices: { id: string; name: string; quantity: number }[];
+  }) {
+    return this.request<any>('/dispensing', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
+      body: JSON.stringify(body),
+    });
+  }
+
+  // Mark calendar event as dispensed
+  async markDispensedOnCalendar(patientId: string, dateISO: string) {
+    return this.request<any>('/calendar/mark-dispensed', {
+      method: 'POST',
+      body: JSON.stringify({ patient_id: patientId, date: dateISO }),
     });
   }
 

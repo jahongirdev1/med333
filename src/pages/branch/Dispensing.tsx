@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { storage } from '@/utils/storage';
 import { apiService } from '@/utils/api';
 import { toast } from '@/hooks/use-toast';
-import { Package, Users, Heart, CheckCircle, Tag } from 'lucide-react';
+import { Users, Heart, CheckCircle } from 'lucide-react';
 
 const Dispensing: React.FC = () => {
   const currentUser = storage.getCurrentUser();
@@ -27,8 +27,6 @@ const Dispensing: React.FC = () => {
   const [categories, setCategories] = useState<any[]>([]);
   const [medicalDevices, setMedicalDevices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
-  
   const [selectedEmployee, setSelectedEmployee] = useState('');
   const [selectedPatient, setSelectedPatient] = useState('');
   const [selectedMedicines, setSelectedMedicines] = useState<Array<{medicineId: string, quantity: number}>>([]);
@@ -70,14 +68,6 @@ const Dispensing: React.FC = () => {
     return medicalDevices.filter(device => device.category_id === categoryId);
   };
 
-  const addMedicineToSelection = () => {
-    setSelectedMedicines([...selectedMedicines, { medicineId: '', quantity: 1 }]);
-  };
-
-  const addDeviceToSelection = () => {
-    setSelectedDevices([...selectedDevices, { deviceId: '', quantity: 1 }]);
-  };
-
   const updateSelectedMedicine = (index: number, medicineId: string, quantity: number) => {
     const updated = [...selectedMedicines];
     updated[index] = { medicineId, quantity };
@@ -90,98 +80,110 @@ const Dispensing: React.FC = () => {
     setSelectedDevices(updated);
   };
 
-  const removeSelectedMedicine = (index: number) => {
-    setSelectedMedicines(selectedMedicines.filter((_, i) => i !== index));
-  };
+  const medicinesPayload = selectedMedicines
+    .filter((r) => r.medicineId && r.quantity > 0)
+    .map((r) => {
+      const med = medicines.find((m) => m.id === r.medicineId);
+      return { id: r.medicineId, name: med?.name || '', quantity: r.quantity };
+    });
 
-  const removeSelectedDevice = (index: number) => {
-    setSelectedDevices(selectedDevices.filter((_, i) => i !== index));
-  };
+  const devicesPayload = selectedDevices
+    .filter((r) => r.deviceId && r.quantity > 0)
+    .map((r) => {
+      const dev = medicalDevices.find((d) => d.id === r.deviceId);
+      return { id: r.deviceId, name: dev?.name || '', quantity: r.quantity };
+    });
+
+  const hasInsufficientStock =
+    selectedMedicines.some((s) => {
+      const med = medicines.find((m) => m.id === s.medicineId);
+      return s.quantity > 0 && med && s.quantity > med.quantity;
+    }) ||
+    selectedDevices.some((s) => {
+      const dev = medicalDevices.find((d) => d.id === s.deviceId);
+      return s.quantity > 0 && dev && s.quantity > dev.quantity;
+    });
+
+  const hasItemsToDispense = medicinesPayload.length > 0 || devicesPayload.length > 0;
 
   const handleDispense = async () => {
-    if (!selectedEmployee || !selectedPatient || (selectedMedicines.length === 0 && selectedDevices.length === 0)) {
+    if (!selectedEmployee || !selectedPatient || !hasItemsToDispense) {
       toast({ title: 'Ошибка', description: 'Выберите сотрудника, пациента и товары для выдачи', variant: 'destructive' });
       return;
     }
 
-    // Validate medicine quantities
-    for (const selected of selectedMedicines) {
-      if (!selected.medicineId || selected.quantity <= 0) {
-        toast({ title: 'Ошибка', description: 'Выберите все лекарства и укажите количество', variant: 'destructive' });
-        return;
-      }
-      
-      const medicine = medicines.find(m => m.id === selected.medicineId);
-      if (!medicine || medicine.quantity < selected.quantity) {
-        toast({ title: 'Ошибка', description: `Недостаточно лекарства ${medicine?.name}`, variant: 'destructive' });
-        return;
-      }
+    if (hasInsufficientStock) {
+      toast({ title: 'Ошибка', description: 'Недостаточно товаров на складе', variant: 'destructive' });
+      return;
     }
 
-    // Validate device quantities
-    for (const selected of selectedDevices) {
-      if (!selected.deviceId || selected.quantity <= 0) {
-        toast({ title: 'Ошибка', description: 'Выберите все ИМН и укажите количество', variant: 'destructive' });
-        return;
-      }
-      
-      const device = medicalDevices.find(d => d.id === selected.deviceId);
-      if (!device || device.quantity < selected.quantity) {
-        toast({ title: 'Ошибка', description: `Недостаточно ИМН ${device?.name}`, variant: 'destructive' });
-        return;
-      }
-    }
+    const employee = employees.find((e) => e.id === selectedEmployee);
+    const patient = patients.find((p) => p.id === selectedPatient);
 
-    const employee = employees.find(e => e.id === selectedEmployee);
-    const patient = patients.find(p => p.id === selectedPatient);
-    
+    const payload = {
+      patient_id: selectedPatient,
+      patient_name: patient ? `${patient.first_name} ${patient.last_name}` : '',
+      employee_id: selectedEmployee,
+      employee_name: employee ? `${employee.first_name} ${employee.last_name}` : '',
+      branch_id: branchId,
+      medicines: medicinesPayload,
+      medical_devices: devicesPayload,
+    };
+
     try {
-      // Prepare dispensing data
-      const items = [];
-      
-      // Add medicines
-      for (const selected of selectedMedicines) {
-        items.push({
-          type: 'medicine',
-          item_id: selected.medicineId,
-          quantity: selected.quantity
-        });
-      }
-      
-      // Add medical devices
-      for (const selected of selectedDevices) {
-        items.push({
-          type: 'medical_device',
-          item_id: selected.deviceId,
-          quantity: selected.quantity
-        });
-      }
-
-      const dispensingData = {
-        patient_id: selectedPatient,
-        employee_id: selectedEmployee,
-        branch_id: branchId,
-        items: items
-      };
-
-      const response = await apiService.createDispensingRecord(dispensingData);
-      
-      if (!response.error) {
-        // Reset form
-        setSelectedEmployee('');
-        setSelectedPatient('');
-        setSelectedMedicines([]);
-        setSelectedDevices([]);
-        
-        // Refresh data
-        await fetchData();
-        
-        toast({ title: 'Товары выданы пациенту!', description: `Выдано лекарств: ${selectedMedicines.length}, ИМН: ${selectedDevices.length}` });
-      } else {
+      const response = await apiService.createDispensingRecord(payload);
+      if (response.error) {
         toast({ title: 'Ошибка', description: response.error, variant: 'destructive' });
+        return;
       }
+
+      // Deduct stock locally
+      setMedicines((prev) =>
+        prev
+          .map((m) => {
+            const used = medicinesPayload.find((mp) => mp.id === m.id);
+            return used ? { ...m, quantity: m.quantity - used.quantity } : m;
+          })
+          .filter((m) => m.quantity > 0),
+      );
+
+      setMedicalDevices((prev) =>
+        prev
+          .map((d) => {
+            const used = devicesPayload.find((dp) => dp.id === d.id);
+            return used ? { ...d, quantity: d.quantity - used.quantity } : d;
+          })
+          .filter((d) => d.quantity > 0),
+      );
+
+      // Reset quantities for dispensed rows
+      setSelectedMedicines((prev) =>
+        prev.map((m) =>
+          medicinesPayload.find((mp) => mp.id === m.medicineId)
+            ? { ...m, quantity: 0 }
+            : m,
+        ),
+      );
+      setSelectedDevices((prev) =>
+        prev.map((d) =>
+          devicesPayload.find((dp) => dp.id === d.deviceId)
+            ? { ...d, quantity: 0 }
+            : d,
+        ),
+      );
+
+      // refresh dispensing history
+      const dispRes = await apiService.getDispensingRecords(branchId);
+      if (dispRes.data) setDispensings(dispRes.data);
+
+      toast({ title: 'Выдача успешно сохранена' });
+
+      await apiService
+        .markDispensedOnCalendar(selectedPatient, new Date().toISOString())
+        .catch(() => {});
     } catch (error) {
-      toast({ title: 'Ошибка', description: 'Не удалось выдать товары', variant: 'destructive' });
+      const message = error instanceof Error ? error.message : 'Не удалось выдать товары';
+      toast({ title: 'Ошибка', description: message, variant: 'destructive' });
     }
   };
 
@@ -241,26 +243,47 @@ const Dispensing: React.FC = () => {
           {categories.map((category) => {
             const categoryMedicines = getMedicinesByCategory(category.id);
             const categoryDevices = getDevicesByCategory(category.id);
-            
+
             if (categoryMedicines.length === 0 && categoryDevices.length === 0) return null;
-            
+
+            const medicineSelection = selectedMedicines.find((m) =>
+              categoryMedicines.some((cm) => cm.id === m.medicineId),
+            );
+            const medicineItem = medicines.find((m) => m.id === medicineSelection?.medicineId);
+            const medicineInsufficient =
+              medicineSelection &&
+              medicineItem &&
+              medicineSelection.quantity > medicineItem.quantity;
+
+            const deviceSelection = selectedDevices.find((d) =>
+              categoryDevices.some((cd) => cd.id === d.deviceId),
+            );
+            const deviceItem = medicalDevices.find((d) => d.id === deviceSelection?.deviceId);
+            const deviceInsufficient =
+              deviceSelection &&
+              deviceItem &&
+              deviceSelection.quantity > deviceItem.quantity;
+
             return (
               <div key={category.id} className="mb-4 p-4 border rounded-lg">
                 <h3 className="font-semibold mb-3">{category.name}</h3>
-                
+
                 {/* Medicines in this category */}
                 {categoryMedicines.length > 0 && (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-3">
                     <div>
                       <Label>Лекарство</Label>
-                      <Select 
+                      <Select
+                        value={medicineSelection?.medicineId || ''}
                         onValueChange={(value) => {
-                          const existing = selectedMedicines.find(m => getMedicinesByCategory(category.id).some(cm => cm.id === m.medicineId));
-                          if (existing) {
-                            const index = selectedMedicines.indexOf(existing);
-                            updateSelectedMedicine(index, value, existing.quantity);
+                          if (medicineSelection) {
+                            const index = selectedMedicines.indexOf(medicineSelection);
+                            updateSelectedMedicine(index, value, medicineSelection.quantity);
                           } else {
-                            setSelectedMedicines([...selectedMedicines, { medicineId: value, quantity: 1 }]);
+                            setSelectedMedicines([
+                              ...selectedMedicines,
+                              { medicineId: value, quantity: 0 },
+                            ]);
                           }
                         }}
                       >
@@ -279,38 +302,49 @@ const Dispensing: React.FC = () => {
                     <div>
                       <Label>Количество</Label>
                       <Input
-                        type="number"
-                        min="0"
-                        placeholder="0"
+                        inputMode="numeric"
+                        pattern="^[0-9]*$"
+                        value={medicineSelection?.quantity ?? 0}
                         onChange={(e) => {
-                          const value = Number(e.target.value);
-                          const existing = selectedMedicines.find(m => getMedicinesByCategory(category.id).some(cm => cm.id === m.medicineId));
-                          if (existing && value > 0) {
-                            const index = selectedMedicines.indexOf(existing);
-                            updateSelectedMedicine(index, existing.medicineId, value);
-                          } else if (value === 0 && existing) {
-                            const index = selectedMedicines.indexOf(existing);
-                            removeSelectedMedicine(index);
+                          const value = parseInt(e.target.value || '0', 10);
+                          if (medicineSelection) {
+                            const index = selectedMedicines.indexOf(medicineSelection);
+                            updateSelectedMedicine(index, medicineSelection.medicineId, value);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const value = parseInt(e.target.value || '0', 10);
+                          if (medicineSelection) {
+                            const index = selectedMedicines.indexOf(medicineSelection);
+                            updateSelectedMedicine(index, medicineSelection.medicineId, isNaN(value) ? 0 : value);
                           }
                         }}
                       />
+                      {medicineInsufficient && (
+                        <p className="text-sm text-red-500 mt-1">
+                          Недостаточно на складе (доступно: {medicineItem?.quantity})
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}
-                
+
                 {/* Medical devices in this category */}
                 {categoryDevices.length > 0 && (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                       <Label>ИМН</Label>
-                      <Select 
+                      <Select
+                        value={deviceSelection?.deviceId || ''}
                         onValueChange={(value) => {
-                          const existing = selectedDevices.find(d => getDevicesByCategory(category.id).some(cd => cd.id === d.deviceId));
-                          if (existing) {
-                            const index = selectedDevices.indexOf(existing);
-                            updateSelectedDevice(index, value, existing.quantity);
+                          if (deviceSelection) {
+                            const index = selectedDevices.indexOf(deviceSelection);
+                            updateSelectedDevice(index, value, deviceSelection.quantity);
                           } else {
-                            setSelectedDevices([...selectedDevices, { deviceId: value, quantity: 1 }]);
+                            setSelectedDevices([
+                              ...selectedDevices,
+                              { deviceId: value, quantity: 0 },
+                            ]);
                           }
                         }}
                       >
@@ -329,21 +363,29 @@ const Dispensing: React.FC = () => {
                     <div>
                       <Label>Количество</Label>
                       <Input
-                        type="number"
-                        min="0"
-                        placeholder="0"
+                        inputMode="numeric"
+                        pattern="^[0-9]*$"
+                        value={deviceSelection?.quantity ?? 0}
                         onChange={(e) => {
-                          const value = Number(e.target.value);
-                          const existing = selectedDevices.find(d => getDevicesByCategory(category.id).some(cd => cd.id === d.deviceId));
-                          if (existing && value > 0) {
-                            const index = selectedDevices.indexOf(existing);
-                            updateSelectedDevice(index, existing.deviceId, value);
-                          } else if (value === 0 && existing) {
-                            const index = selectedDevices.indexOf(existing);
-                            removeSelectedDevice(index);
+                          const value = parseInt(e.target.value || '0', 10);
+                          if (deviceSelection) {
+                            const index = selectedDevices.indexOf(deviceSelection);
+                            updateSelectedDevice(index, deviceSelection.deviceId, value);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const value = parseInt(e.target.value || '0', 10);
+                          if (deviceSelection) {
+                            const index = selectedDevices.indexOf(deviceSelection);
+                            updateSelectedDevice(index, deviceSelection.deviceId, isNaN(value) ? 0 : value);
                           }
                         }}
                       />
+                      {deviceInsufficient && (
+                        <p className="text-sm text-red-500 mt-1">
+                          Недостаточно на складе (доступно: {deviceItem?.quantity})
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -352,9 +394,9 @@ const Dispensing: React.FC = () => {
           })}
         </div>
 
-        <Button 
-          onClick={handleDispense} 
-          disabled={!selectedEmployee || !selectedPatient || (selectedMedicines.length === 0 && selectedDevices.length === 0)}
+        <Button
+          onClick={handleDispense}
+          disabled={!selectedEmployee || !selectedPatient || !hasItemsToDispense || hasInsufficientStock}
         >
           Выдать товары
         </Button>
