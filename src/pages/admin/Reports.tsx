@@ -14,8 +14,8 @@ import * as XLSX from 'xlsx';
 
 const Reports: React.FC = () => {
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [selectedBranch, setSelectedBranch] = useState('');
-  const [reportType, setReportType] = useState('');
+  const [selectedBranch, setSelectedBranch] = useState<string | undefined>(undefined);
+  const [reportType, setReportType] = useState<string | undefined>(undefined);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [reportData, setReportData] = useState<any[]>([]);
@@ -64,7 +64,7 @@ const Reports: React.FC = () => {
     try {
       const result = await apiService.generateReport({
         type: reportType,
-        branch_id: selectedBranch || undefined,
+        branch_id: selectedBranch && selectedBranch !== 'all' ? selectedBranch : undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined
       });
@@ -112,7 +112,7 @@ const Reports: React.FC = () => {
 
   const showDetails = async (item: any) => {
     try {
-      const result = await apiService.getReportDetails(reportType, item.id);
+      const result = await apiService.getReportDetails(reportType!, item.id);
       if (result.data) {
         setSelectedItemDetails(result.data);
         setDetailsDialogOpen(true);
@@ -131,7 +131,7 @@ const Reports: React.FC = () => {
     return branch?.name || 'Главный склад';
   };
 
-  const getReportIcon = (type: string) => {
+  const getReportIcon = (type?: string) => {
     const reportType = reportTypes.find(rt => rt.value === type);
     return reportType?.icon || FileText;
   };
@@ -218,17 +218,19 @@ const Reports: React.FC = () => {
 
             <div>
               <Label>Филиал</Label>
-              <Select value={selectedBranch} onValueChange={setSelectedBranch}>
+              <Select value={selectedBranch ?? undefined} onValueChange={setSelectedBranch}>
                 <SelectTrigger>
                   <SelectValue placeholder="Все филиалы" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Все филиалы</SelectItem>
-                  {branches.map((branch) => (
-                    <SelectItem key={branch.id} value={branch.id}>
-                      {branch.name}
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="all">Все филиалы</SelectItem>
+                  {branches
+                    .filter((branch) => branch?.id)
+                    .map((branch) => (
+                      <SelectItem key={String(branch.id)} value={String(branch.id)}>
+                        {branch.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -281,7 +283,7 @@ const Reports: React.FC = () => {
                 return <Icon className="h-5 w-5" />;
               })()}
               Результаты отчета
-              {selectedBranch && (
+              {selectedBranch && selectedBranch !== 'all' && (
                 <span className="text-sm font-normal text-gray-600">
                   - {getBranchName(selectedBranch)}
                 </span>
