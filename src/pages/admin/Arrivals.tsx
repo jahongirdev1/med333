@@ -37,7 +37,7 @@ const AdminArrivals: React.FC = () => {
 
   const fetchArrivals = async () => {
     const res = await apiService.getArrivals(activeTab);
-    if (res.data) setArrivals(res.data);
+    setArrivals(res.data);
   };
 
   const addRow = (type: ItemType) => {
@@ -109,7 +109,7 @@ const AdminArrivals: React.FC = () => {
 
       <h2>Arrivals</h2>
       <ul>
-        {arrivals.map((a) => (
+        {(arrivals ?? []).map((a) => (
           <li key={a.id}>
             {a.item_name} - {a.quantity}
           </li>
