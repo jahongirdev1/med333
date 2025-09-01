@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
@@ -33,18 +33,39 @@ const ReceiptRowItem: React.FC<Props> = ({
   const placeholder = activeTab === 'medicine' ? 'Выберите лекарство' : 'Выберите ИМН';
   const label = activeTab === 'medicine' ? 'Лекарство' : 'ИМН';
 
+  // --- Qty input UX: keep string state; clamp on blur only
+  const [qtyText, setQtyText] = useState<string>(String(row.qty ?? 1));
+  useEffect(() => {
+    setQtyText(String(row.qty ?? 1));
+  }, [row.qty]);
+
   const handleSelect = (val: string) => {
     const item = options.find((i) => i.id === val);
     onUpdate(row.id, 'itemId', val);
     onUpdate(row.id, 'itemName', item?.name ?? '');
   };
 
+  const handleQtyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value;
+    // allow only digits and empty string while typing
+    if (/^\d*$/.test(v)) setQtyText(v);
+  };
+
+  const handleQtyBlur = () => {
+    let n = parseInt(qtyText || '0', 10);
+    if (!Number.isFinite(n) || n < 1) n = 1;
+    onUpdate(row.id, 'qty', n);
+    setQtyText(String(n));
+  };
+
   return (
-    <div className="grid grid-cols-12 gap-4 items-center">
-      <div className="col-span-5">
+    // Responsive grid: stacked on mobile, 12-col on desktop
+    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start md:items-center">
+      {/* Select */}
+      <div className="md:col-span-5 min-w-0">
         <div className="text-sm font-medium mb-1">{label}</div>
         <Select value={row.itemId ?? ''} onValueChange={handleSelect}>
-          <SelectTrigger>
+          <SelectTrigger className="w-full">
             <SelectValue placeholder={placeholder} />
           </SelectTrigger>
           <SelectContent>
@@ -57,20 +78,29 @@ const ReceiptRowItem: React.FC<Props> = ({
         </Select>
       </div>
 
-      <div className="col-span-3">
+      {/* Quantity */}
+      <div className="md:col-span-3">
         <div className="text-sm font-medium mb-1">Количество</div>
         <Input
-          type="number"
-          min={1}
-          value={row.qty}
-          onChange={(e) =>
-            onUpdate(row.id, 'qty', Math.max(1, Number(e.target.value) || 0))
-          }
+          className="w-full"
+          // mobile keyboard
+          inputMode="numeric"
+          pattern="[0-9]*"
+          // controlled string value so user can freely edit
+          value={qtyText}
+          onChange={handleQtyChange}
+          onBlur={handleQtyBlur}
+          placeholder="1"
         />
       </div>
 
-      <div className="col-span-4 flex justify-end items-end">
-        <Button variant="destructive" onClick={() => onRemove(row.id)}>
+      {/* Remove button */}
+      <div className="md:col-span-4 flex md:justify-end md:items-end">
+        <Button
+          variant="destructive"
+          className="w-full md:w-auto"
+          onClick={() => onRemove(row.id)}
+        >
           Удалить
         </Button>
       </div>
