@@ -12,11 +12,39 @@ import * as XLSX from 'xlsx';
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
 
+const METRICS = [
+  { value: 'stock', label: 'Stock' },
+  { value: 'arrivals', label: 'Arrivals' },
+  { value: 'dispensing', label: 'Dispensing' },
+  { value: 'transfers', label: 'Transfers' },
+] as const;
+
+const MONTHS = [
+  { value: '1', label: 'Янв' },
+  { value: '2', label: 'Фев' },
+  { value: '3', label: 'Мар' },
+  { value: '4', label: 'Апр' },
+  { value: '5', label: 'Май' },
+  { value: '6', label: 'Июн' },
+  { value: '7', label: 'Июл' },
+  { value: '8', label: 'Авг' },
+  { value: '9', label: 'Сен' },
+  { value: '10', label: 'Окт' },
+  { value: '11', label: 'Ноя' },
+  { value: '12', label: 'Дек' },
+];
+
+const YEARS = Array.from({ length: 6 }, (_, i) => {
+  const y = new Date().getFullYear() - i;
+  return { value: String(y), label: String(y) };
+});
+
 const Analytics = () => {
   const [branches, setBranches] = useState<any[]>([]);
-  const [selectedBranch, setSelectedBranch] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [metric, setMetric] = useState<string>('stock');
+  const [branchId, setBranchId] = useState<string | undefined>(undefined);
+  const [month, setMonth] = useState<string>(String(new Date().getMonth() + 1));
+  const [year, setYear] = useState<string>(String(new Date().getFullYear()));
   const [analyticsData, setAnalyticsData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
@@ -43,11 +71,12 @@ const Analytics = () => {
     try {
       const params = {
         type: 'analytics',
-        branch_id: selectedBranch || undefined,
+        metric,
+        branch_id: branchId && branchId !== 'all' ? branchId : undefined,
         date_from: dateFrom ? format(dateFrom, 'yyyy-MM-dd') : undefined,
         date_to: dateTo ? format(dateTo, 'yyyy-MM-dd') : undefined,
-        month: selectedMonth,
-        year: selectedYear
+        month: parseInt(month),
+        year: parseInt(year)
       };
 
       const response = await apiService.generateReport(params);
@@ -83,8 +112,13 @@ const Analytics = () => {
       ['Всего пациентов', analyticsData.totalPatients || 0],
       ['Всего лекарств отдано', analyticsData.totalMedicinesDispensed || 0],
       ['Всего ИМН отдано', analyticsData.totalDevicesDispensed || 0],
-      ['Период', `${selectedMonth}/${selectedYear}`],
-      ['Филиал', selectedBranch ? branches.find(b => b.id === selectedBranch)?.name || 'Неизвестно' : 'Все филиалы']
+      ['Период', `${month}/${year}`],
+      [
+        'Филиал',
+        branchId && branchId !== 'all'
+          ? branches.find(b => String(b.id) === branchId)?.name || 'Неизвестно'
+          : 'Все филиалы'
+      ]
     ];
 
     const ws = XLSX.utils.aoa_to_sheet(summaryData);
@@ -118,7 +152,11 @@ const Analytics = () => {
       XLSX.utils.book_append_sheet(wb, ws3, 'По пациентам');
     }
 
-    const fileName = `analytics_${selectedMonth}_${selectedYear}${selectedBranch ? `_${branches.find(b => b.id === selectedBranch)?.name}` : ''}.xlsx`;
+    const fileName = `analytics_${month}_${year}${
+      branchId && branchId !== 'all'
+        ? `_${branches.find(b => String(b.id) === branchId)?.name}`
+        : ''
+    }.xlsx`;
     XLSX.writeFile(wb, fileName);
     
     toast({
@@ -127,8 +165,8 @@ const Analytics = () => {
     });
   };
 
-  const getBranchName = (branchId: string) => {
-    const branch = branches.find(b => b.id === branchId);
+  const getBranchName = (id: string) => {
+    const branch = branches.find(b => String(b.id) === id);
     return branch ? branch.name : 'Неизвестный филиал';
   };
 
@@ -150,18 +188,17 @@ const Analytics = () => {
           <CardTitle>Фильтры</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             <div>
-              <label className="text-sm font-medium">Филиал</label>
-              <Select value={selectedBranch} onValueChange={setSelectedBranch}>
+              <label className="text-sm font-medium">Метрика</label>
+              <Select value={metric} onValueChange={setMetric}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Все филиалы" />
+                  <SelectValue placeholder="Метрика" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Все филиалы</SelectItem>
-                  {branches.map((branch) => (
-                    <SelectItem key={branch.id} value={branch.id}>
-                      {branch.name}
+                  {METRICS.map(m => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -169,15 +206,34 @@ const Analytics = () => {
             </div>
 
             <div>
-              <label className="text-sm font-medium">Месяц</label>
-              <Select value={selectedMonth.toString()} onValueChange={(value) => setSelectedMonth(parseInt(value))}>
+              <label className="text-sm font-medium">Филиал</label>
+              <Select value={branchId ?? undefined} onValueChange={setBranchId}>
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Все филиалы" />
                 </SelectTrigger>
                 <SelectContent>
-                  {Array.from({ length: 12 }, (_, i) => (
-                    <SelectItem key={i + 1} value={(i + 1).toString()}>
-                      {format(new Date(2024, i, 1), 'LLLL', { locale: ru })}
+                  <SelectItem value="all">Все филиалы</SelectItem>
+                  {branches
+                    .filter(b => b?.id)
+                    .map(branch => (
+                      <SelectItem key={String(branch.id)} value={String(branch.id)}>
+                        {branch.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Месяц</label>
+              <Select value={month} onValueChange={setMonth}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Месяц" />
+                </SelectTrigger>
+                <SelectContent>
+                  {MONTHS.map(m => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -186,19 +242,16 @@ const Analytics = () => {
 
             <div>
               <label className="text-sm font-medium">Год</label>
-              <Select value={selectedYear.toString()} onValueChange={(value) => setSelectedYear(parseInt(value))}>
+              <Select value={year} onValueChange={setYear}>
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Год" />
                 </SelectTrigger>
                 <SelectContent>
-                  {Array.from({ length: 5 }, (_, i) => {
-                    const year = new Date().getFullYear() - 2 + i;
-                    return (
-                      <SelectItem key={year} value={year.toString()}>
-                        {year}
-                      </SelectItem>
-                    );
-                  })}
+                  {YEARS.map(y => (
+                    <SelectItem key={y.value} value={y.value}>
+                      {y.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
