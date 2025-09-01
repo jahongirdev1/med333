@@ -19,19 +19,20 @@ export interface ReceiptRow {
   qty: number;
 }
 
-interface Item {
+interface CatalogItem {
   id: string;
   name: string;
   quantity?: number;
+  branch_id?: string | null;
 }
 
 interface ReceiptRowItemProps {
   row: ReceiptRow;
-  medicines: Item[];
-  devices: Item[];
+  medicines: CatalogItem[];
+  devices: CatalogItem[];
   onUpdate: (id: string, field: keyof ReceiptRow, value: unknown) => void;
   onRemove: (id: string) => void;
-  getAddedQuantity: (itemType: 'medicine' | 'medical_device', itemId: string) => number;
+  activeTab: 'medicine' | 'medical_device';
 }
 
 const ReceiptRowItem: React.FC<ReceiptRowItemProps> = ({
@@ -40,71 +41,46 @@ const ReceiptRowItem: React.FC<ReceiptRowItemProps> = ({
   devices,
   onUpdate,
   onRemove,
-  getAddedQuantity,
+  activeTab,
 }) => {
-  const items = row.itemType === 'medicine' ? medicines : devices;
-  const addedQuantity = row.itemId ? getAddedQuantity(row.itemType, row.itemId) : 0;
+  const options = activeTab === 'medicine' ? medicines : devices;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 bg-gray-50 rounded-lg">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-gray-50 rounded-lg">
       <div>
-        <Label>Тип</Label>
-        <Select
-          value={row.itemType}
-          onValueChange={(value) => {
-            onUpdate(row.id, 'itemType', value);
-            onUpdate(row.id, 'itemId', null);
-            onUpdate(row.id, 'itemName', '');
-          }}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="medicine">Лекарство</SelectItem>
-            <SelectItem value="medical_device">ИМН</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div>
-        <Label>{row.itemType === 'medicine' ? 'Лекарство' : 'ИМН'}</Label>
+        <Label>{activeTab === 'medicine' ? 'Лекарство' : 'ИМН'}</Label>
         <Select
           value={row.itemId ?? ''}
-          onValueChange={(value) => {
-            onUpdate(row.id, 'itemId', value);
-            const item = items.find((i) => i.id === value);
-            onUpdate(row.id, 'itemName', item ? item.name : '');
+          onValueChange={(val) => {
+            const item = options.find((i) => i.id === val);
+            onUpdate(row.id, 'itemId', val);
+            onUpdate(row.id, 'itemName', item?.name ?? '');
           }}
+          disabled={options.length === 0}
         >
           <SelectTrigger>
             <SelectValue
-              placeholder={row.itemType === 'medicine' ? 'Выберите лекарство' : 'Выберите ИМН'}
+              placeholder={activeTab === 'medicine' ? 'Выберите лекарство' : 'Выберите ИМН'}
             />
           </SelectTrigger>
           <SelectContent>
-            {items.map((item) => {
-              const willAdd = getAddedQuantity(row.itemType, item.id);
-              return (
-                <SelectItem key={item.id} value={item.id}>
-                  {item.name} (текущее: {item.quantity || 0}
-                  {willAdd > 0 ? ` + ${willAdd}` : ''} шт.)
-                </SelectItem>
-              );
-            })}
+            {options.map((o) => (
+              <SelectItem key={o.id} value={o.id}>
+                {o.name} (текущее: {o.quantity ?? 0} шт.)
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
-        {row.itemId && addedQuantity > 0 && (
-          <p className="text-xs text-blue-600 mt-1">Добавляется всего: {addedQuantity} шт.</p>
-        )}
       </div>
       <div>
         <Label>Количество</Label>
         <Input
           type="number"
-          min="1"
           value={row.qty}
-          onChange={(e) => onUpdate(row.id, 'qty', Number(e.target.value))}
-          placeholder="Количество"
+          min={1}
+          onChange={(e) =>
+            onUpdate(row.id, 'qty', Math.max(1, Number(e.target.value) || 0))
+          }
         />
       </div>
       <div className="flex items-end">
