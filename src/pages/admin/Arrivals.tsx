@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Package, Plus, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
@@ -9,7 +9,7 @@ import { uid } from '@/shared/utils/uid';
 
 export type ItemType = 'medicine' | 'medical_device';
 
-interface CatalogItem {
+export interface CatalogItem {
   id: string;
   name: string;
   quantity?: number;
@@ -18,52 +18,53 @@ interface CatalogItem {
 
 const AdminArrivals: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ItemType>('medicine');
-  const [arrivals, setArrivals] = useState<any[]>([]);
   const [rows, setRows] = useState<ReceiptRow[]>([]);
   const [medicines, setMedicines] = useState<CatalogItem[]>([]);
   const [devices, setDevices] = useState<CatalogItem[]>([]);
 
-  const visibleRows = rows.filter((r) => r.itemType === activeTab);
-
   useEffect(() => {
-    fetchCatalogs();
+    void fetchCatalogs();
   }, []);
 
-  useEffect(() => {
-    fetchArrivals();
-  }, [activeTab]);
-
   const fetchCatalogs = async () => {
-    const med = await apiService.getMedicines();
-    setMedicines(
-      Array.isArray(med?.data)
-        ? med.data.filter((i: CatalogItem) => !i.branch_id)
-        : Array.isArray(med)
+    try {
+      const med = await apiService.getMedicines();
+      setMedicines(
+        Array.isArray(med?.data)
+          ? med.data.filter((i: CatalogItem) => !i.branch_id)
+          : Array.isArray(med)
           ? (med as CatalogItem[]).filter((i) => !i.branch_id)
           : []
-    );
+      );
 
-    const dev = await apiService.getMedicalDevices();
-    setDevices(
-      Array.isArray(dev?.data)
-        ? dev.data.filter((i: CatalogItem) => !i.branch_id)
-        : Array.isArray(dev)
+      const dev = await apiService.getMedicalDevices();
+      setDevices(
+        Array.isArray(dev?.data)
+          ? dev.data.filter((i: CatalogItem) => !i.branch_id)
+          : Array.isArray(dev)
           ? (dev as CatalogItem[]).filter((i) => !i.branch_id)
           : []
-    );
+      );
+    } catch {
+      toast({
+        title: 'Ошибка',
+        description: 'Не удалось загрузить справочники',
+        variant: 'destructive',
+      });
+    }
   };
 
-  const fetchArrivals = async () => {
-    const res = await apiService.getArrivals(activeTab);
-    setArrivals(res.data);
-  };
+  const visibleRows = useMemo(
+    () => rows.filter((r) => r.itemType === activeTab),
+    [rows, activeTab]
+  );
 
   const addRow = () => {
     setRows((prev) => [
       ...prev,
       {
         id: uid(),
-        itemType: activeTab,
+        itemType: activeTab, // derive from tab
         itemId: null,
         itemName: '',
         qty: 1,
@@ -72,17 +73,19 @@ const AdminArrivals: React.FC = () => {
   };
 
   const updateRow = (id: string, field: keyof ReceiptRow, value: unknown) => {
-    setRows(rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+    setRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, [field]: value } : r))
+    );
   };
 
   const removeRow = (id: string) => {
-    setRows(rows.filter((r) => r.id !== id));
+    setRows((prev) => prev.filter((r) => r.id !== id));
   };
 
   const validateRows = () => {
-    for (const r of rows) {
+    for (const r of visibleRows) {
       if (!r.itemId) {
-        toast({ title: 'Ошибка', description: 'Выберите товар для всех строк', variant: 'destructive' });
+        toast({ title: 'Ошибка', description: 'Выберите товар в каждой строке', variant: 'destructive' });
         return false;
       }
       if (r.qty <= 0) {
@@ -95,62 +98,60 @@ const AdminArrivals: React.FC = () => {
 
   const saveRows = async () => {
     if (!validateRows()) return;
-    const res = await apiService.createArrivals(
-      rows.map((r) => ({
-        item_type: r.itemType,
-        item_id: r.itemId!,
-        item_name: r.itemName,
-        quantity: r.qty,
-      }))
-    );
-    if (!res.error) {
+
+    const payload = rows.map((r) => ({
+      item_type: r.itemType,
+      item_id: r.itemId!,
+      item_name: r.itemName,
+      quantity: r.qty,
+    }));
+
+    const res = await apiService.createArrivals(payload);
+    if (!('error' in res) || !res.error) {
       setRows([]);
-      fetchArrivals();
+      toast({ title: 'Успех', description: 'Поступления сохранены' });
     } else {
-      toast({ title: 'Ошибка', description: res.error, variant: 'destructive' });
+      toast({ title: 'Ошибка', description: String(res.error), variant: 'destructive' });
     }
   };
 
   const isSaveDisabled =
-    visibleRows.length === 0 || visibleRows.some((r) => !r.itemId || r.qty <= 0);
+    visibleRows.length === 0 ||
+    visibleRows.some((r) => !r.itemId || !r.itemName || r.qty <= 0);
 
   return (
     <div>
-      <div className="mb-4">
-        <ToggleGroup type="single" value={activeTab} onValueChange={(v) => v && setActiveTab(v as ItemType)}>
+      <div className="mb-6">
+        <ToggleGroup
+          type="single"
+          value={activeTab}
+          onValueChange={(v) => v && setActiveTab(v as ItemType)}
+        >
           <ToggleGroupItem value="medicine">Лекарства</ToggleGroupItem>
           <ToggleGroupItem value="medical_device">ИМН</ToggleGroupItem>
         </ToggleGroup>
       </div>
 
-      <h2>Arrivals</h2>
-      <ul>
-        {(arrivals ?? []).map((a) => (
-          <li key={a.id}>
-            {a.item_name} - {a.quantity}
-          </li>
-        ))}
-      </ul>
+      <h2 className="text-xl font-semibold mb-3">Добавить поступление</h2>
 
-      <h2>Добавить поступление</h2>
       {visibleRows.length > 0 ? (
         <div className="space-y-4 mb-6">
-            {visibleRows.map((row) => (
-              <ReceiptRowItem
-                key={row.id}
-                row={row}
-                medicines={medicines}
-                devices={devices}
-                onUpdate={updateRow}
-                onRemove={removeRow}
-                activeTab={activeTab}
-              />
-            ))}
-          </div>
+          {visibleRows.map((row) => (
+            <ReceiptRowItem
+              key={row.id}
+              row={row}
+              medicines={medicines}
+              devices={devices}
+              activeTab={activeTab}
+              onUpdate={updateRow}
+              onRemove={removeRow}
+            />
+          ))}
+        </div>
       ) : (
         <div className="text-center py-8 text-gray-500">
           <Package className="h-16 w-16 mx-auto mb-4 text-gray-400" />
-          <p>Нажмите "Добавить поступление" чтобы начать</p>
+          <p>Нажмите «Добавить поступление», чтобы начать</p>
         </div>
       )}
 
@@ -169,3 +170,4 @@ const AdminArrivals: React.FC = () => {
 };
 
 export default AdminArrivals;
+
