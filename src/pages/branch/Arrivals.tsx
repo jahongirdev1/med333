@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { storage } from '@/utils/storage';
 import { apiService } from '@/utils/api';
-import { Package, Calendar, TrendingUp, Eye, Bell, CheckCircle, AlertTriangle, Check, X, FileText } from 'lucide-react';
+import { Package, Calendar, TrendingUp, Eye, Bell, CheckCircle, AlertTriangle, Check, X, FileText, Loader2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
+
+const formatDate = (iso: string) => new Date(iso).toLocaleDateString('ru-RU');
+const formatTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+const shortId = (id?: string) => (id ? id.slice(0, 8) : '');
 
 const Arrivals: React.FC = () => {
   const currentUser = storage.getCurrentUser();
@@ -24,10 +33,32 @@ const Arrivals: React.FC = () => {
   const [showNotifications, setShowNotifications] = useState(true);
   const [selectedShipment, setSelectedShipment] = useState<any>(null);
   const [rejectionReason, setRejectionReason] = useState('');
+  const [medMap, setMedMap] = useState<Map<string, string>>(new Map());
+  const [imnMap, setImnMap] = useState<Map<string, string>>(new Map());
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     fetchData();
   }, [branchId]);
+
+  useEffect(() => {
+    const loadCatalogs = async () => {
+      try {
+        const [medsRes, imnRes] = await Promise.all([
+          apiService.getMedicines(),
+          apiService.getMedicalDevices(),
+        ]);
+        const medsArray = Array.isArray(medsRes.data) ? medsRes.data : [];
+        const imnArray = Array.isArray(imnRes.data) ? imnRes.data : [];
+        setMedMap(new Map(medsArray.map((m: any) => [m.id, m.name])));
+        setImnMap(new Map(imnArray.map((d: any) => [d.id, d.name])));
+      } catch (error) {
+        console.error('Error loading catalogs:', error);
+      }
+    };
+
+    loadCatalogs();
+  }, []);
 
   const fetchData = async () => {
     if (!branchId) {
@@ -132,11 +163,20 @@ const Arrivals: React.FC = () => {
 
   const handleAcceptShipment = async (shipmentId: string) => {
     try {
+      setIsSaving(true);
       await apiService.acceptShipment(shipmentId);
       toast({ title: 'Поступление принято' });
-      fetchData();
+      try {
+        await fetchData();
+      } finally {
+        if (selectedShipment) {
+          setSelectedShipment(null);
+        }
+      }
     } catch (error) {
       toast({ title: 'Ошибка принятия поступления', variant: 'destructive' });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -266,9 +306,9 @@ const Arrivals: React.FC = () => {
                 <div key={shipment.id} className="bg-white p-4 rounded border">
                   <div className="flex justify-between items-start">
                     <div>
-                      <p className="font-medium">Поступление #{shipment.id}</p>
+                      <span className="font-semibold">Поступление #{shortId(shipment.id)}</span>
                       <p className="text-sm text-muted-foreground">
-                        Дата: {new Date(shipment.created_at).toLocaleDateString('ru-RU')}
+                        Дата: {formatDate(shipment.created_at)}, Время: {formatTime(shipment.created_at)}
                       </p>
                        {shipment.medicines && shipment.medicines.length > 0 && (
                          <p className="text-sm">Лекарств: {shipment.medicines.length} видов</p>
@@ -458,7 +498,7 @@ const Arrivals: React.FC = () => {
         <Dialog open={!!selectedShipment} onOpenChange={() => setSelectedShipment(null)}>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>Поступление #{selectedShipment.id}</DialogTitle>
+              <DialogTitle>Поступление #{shortId(selectedShipment.id)}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4">
               <div>
@@ -473,7 +513,7 @@ const Arrivals: React.FC = () => {
                   <div className="space-y-2">
                     {selectedShipment.medicines.map((item: any, index: number) => (
                       <div key={index} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                        <span>{item.medicine_name || `Лекарство #${item.medicine_id}`}</span>
+                        <span>{item.medicine_name || medMap.get(item.medicine_id) || 'Неизвестное лекарство'}</span>
                         <Badge variant="outline">{item.quantity} шт.</Badge>
                       </div>
                     ))}
@@ -487,7 +527,7 @@ const Arrivals: React.FC = () => {
                    <div className="space-y-2">
                      {selectedShipment.medical_devices.map((item: any, index: number) => (
                        <div key={index} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                         <span>{item.device_name || `ИМН #${item.device_id}`}</span>
+                         <span>{item.device_name || imnMap.get(item.device_id) || 'Неизвестное ИМН'}</span>
                          <Badge variant="outline">{item.quantity} шт.</Badge>
                        </div>
                      ))}
@@ -514,8 +554,12 @@ const Arrivals: React.FC = () => {
                   <X className="h-4 w-4 mr-2" />
                   Отклонить
                 </Button>
-                <Button onClick={() => handleAcceptShipment(selectedShipment.id)}>
-                  <Check className="h-4 w-4 mr-2" />
+                <Button onClick={() => handleAcceptShipment(selectedShipment.id)} disabled={isSaving}>
+                  {isSaving ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Check className="h-4 w-4 mr-2" />
+                  )}
                   Принять
                 </Button>
               </div>
