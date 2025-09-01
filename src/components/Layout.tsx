@@ -95,6 +95,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     { path: '/branch', icon: Home, label: 'Главная' },
     { path: '/branch/arrivals', icon: ArrowLeftRight, label: 'Поступления' },
     { path: '/branch/medical-devices', icon: Package, label: 'ИМН' },
+    { path: '/branch/medicines', icon: Package, label: 'Лекарства' },
     { path: '/branch/dispensing', icon: Package, label: 'Выдачи' },
     { path: '/branch/patients', icon: UserCheck, label: 'Пациенты' },
     { path: '/branch/employees', icon: Users, label: 'Сотрудники' },

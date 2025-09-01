@@ -3,8 +3,7 @@ import { apiService } from '@/utils/api';
 import { storage } from '@/utils/storage';
 import { Package, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 const BranchMedicalDevices: React.FC = () => {
   const currentUser = storage.getCurrentUser();
@@ -37,7 +36,7 @@ const BranchMedicalDevices: React.FC = () => {
 
   const getCategoryName = (categoryId: string) => {
     const category = categories.find(c => c.id === categoryId);
-    return category?.name || 'Без категории';
+    return category?.name ?? '—';
   };
 
   const filteredDevices = devices.filter(device =>
@@ -66,29 +65,25 @@ const BranchMedicalDevices: React.FC = () => {
         />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filteredDevices.map((device) => (
-          <Card key={device.id}>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">{device.name}</CardTitle>
-              <Badge variant="secondary">{getCategoryName(device.category_id)}</Badge>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">Цена закупки:</span>
-                  <span className="font-medium">{device.purchase_price?.toFixed(2)} ₸</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">Количество:</span>
-                  <Badge variant={device.quantity > 10 ? "default" : device.quantity > 0 ? "secondary" : "destructive"}>
-                    {device.quantity} шт.
-                  </Badge>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Название</TableHead>
+              <TableHead>Категория</TableHead>
+              <TableHead className="text-right">Количество</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredDevices.map((device) => (
+              <TableRow key={device.id}>
+                <TableCell className="font-medium">{device.name}</TableCell>
+                <TableCell>{getCategoryName(device.category_id)}</TableCell>
+                <TableCell className="text-right">{(device.quantity ?? 0)} шт.</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </div>
 
       {filteredDevices.length === 0 && (
