@@ -13,7 +13,7 @@ const Calendar: React.FC = () => {
   const branchId = currentUser?.branchId;
   
   const [patients, setPatients] = useState<any[]>([]);
-  const [selectedPatient, setSelectedPatient] = useState<string>('');
+  const [selectedPatient, setSelectedPatient] = useState<string | undefined>(undefined);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dispensingData, setDispensingData] = useState<any>({});
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
@@ -132,17 +132,17 @@ const Calendar: React.FC = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <Select value={selectedPatient} onValueChange={setSelectedPatient}>
+              <Select value={selectedPatient ?? undefined} onValueChange={setSelectedPatient}>
                 <SelectTrigger>
                   <SelectValue placeholder="Все пациенты" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Все пациенты</SelectItem>
-                  {patients.map((patient) => (
-                    <SelectItem key={patient.id} value={patient.id}>
+                  {patients.filter((patient) => patient?.id).map((patient) => (
+                    <SelectItem key={String(patient.id)} value={String(patient.id)}>
                       {patient.first_name || patient.firstName} {patient.last_name || patient.lastName}
                     </SelectItem>
                   ))}
+                  <SelectItem value="all">Все пациенты</SelectItem>
                 </SelectContent>
               </Select>
             </CardContent>

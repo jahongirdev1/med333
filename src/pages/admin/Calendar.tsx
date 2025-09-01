@@ -10,7 +10,7 @@ import { toast } from '@/hooks/use-toast';
 const AdminCalendar: React.FC = () => {
   const [dispensings, setDispensings] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
-  const [selectedBranch, setSelectedBranch] = useState('');
+  const [selectedBranch, setSelectedBranch] = useState<string | undefined>(undefined);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(true);
 
@@ -38,7 +38,8 @@ const AdminCalendar: React.FC = () => {
   const fetchDispensings = async () => {
     setLoading(true);
     try {
-      const response = await apiService.getDispensingRecords(selectedBranch || undefined);
+      const branchParam = selectedBranch === 'all' ? undefined : selectedBranch;
+      const response = await apiService.getDispensingRecords(branchParam);
       if (response.data) {
         // Filter dispensings by selected date
         const filtered = response.data.filter((dispensing: any) => {
@@ -135,17 +136,17 @@ const AdminCalendar: React.FC = () => {
           <div className="flex justify-between items-center">
             <CardTitle>Фильтры</CardTitle>
             <div className="flex space-x-2">
-              <Select value={selectedBranch} onValueChange={setSelectedBranch}>
+              <Select value={selectedBranch ?? undefined} onValueChange={setSelectedBranch}>
                 <SelectTrigger className="w-48">
                   <SelectValue placeholder="Все филиалы" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Все филиалы</SelectItem>
-                  {branches.map((branch) => (
-                    <SelectItem key={branch.id} value={branch.id}>
+                  {branches.filter((branch) => branch?.id).map((branch) => (
+                    <SelectItem key={String(branch.id)} value={String(branch.id)}>
                       {branch.name}
                     </SelectItem>
                   ))}
+                  <SelectItem value="all">Все филиалы</SelectItem>
                 </SelectContent>
               </Select>
               <input

@@ -10,7 +10,7 @@ const BranchMedicines: React.FC = () => {
   const branchId = currentUser?.branchId;
 
   const [items, setItems] = useState<any[]>([]);
-  const [categories, setCategories] = useState<any[]>([]);
+  const [catMap, setCatMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -18,14 +18,20 @@ const BranchMedicines: React.FC = () => {
     fetchData();
   }, [branchId]);
 
+  useEffect(() => {
+    (async () => {
+      const res = await apiService.getCategories?.('medicine');
+      const arr = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
+      const map: Record<string, string> = {};
+      arr.forEach((c: any) => { if (c?.id) map[c.id] = c.name; });
+      setCatMap(map);
+    })();
+  }, []);
+
   const fetchData = async () => {
     try {
-      const [medsRes, catRes] = await Promise.all([
-        apiService.getMedicines(branchId),
-        apiService.getMedicineCategories(),
-      ]);
+      const medsRes = await apiService.getMedicines(branchId);
       setItems(medsRes?.data || []);
-      setCategories(catRes?.data || []);
     } catch (error) {
       console.error('Error fetching medicines:', error);
     } finally {
@@ -33,15 +39,14 @@ const BranchMedicines: React.FC = () => {
     }
   };
 
-  const getCategoryName = (categoryId: string) => {
-    const category = categories.find((c: any) => c.id === categoryId);
-    return category?.name ?? '—';
-  };
-
-  const filteredItems = items.filter((med: any) =>
-    med.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    getCategoryName(med.category_id).toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredItems = items.filter((med: any) => {
+    const catId = med.category_id ?? med.categoryId ?? '';
+    const catName = catMap[catId] ?? '—';
+    return (
+      med.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      catName.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  });
 
   if (loading) {
     return <div className="flex justify-center items-center h-64">Загрузка лекарств...</div>;
@@ -74,13 +79,17 @@ const BranchMedicines: React.FC = () => {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredItems.map((med) => (
-              <TableRow key={med.id}>
-                <TableCell className="font-medium">{med.name}</TableCell>
-                <TableCell>{getCategoryName(med.category_id)}</TableCell>
-                <TableCell className="text-right">{(med.quantity ?? 0)} шт.</TableCell>
-              </TableRow>
-            ))}
+            {filteredItems.map((med) => {
+              const catId = med.category_id ?? med.categoryId ?? '';
+              const catName = catMap[catId] ?? '—';
+              return (
+                <TableRow key={med.id}>
+                  <TableCell className="font-medium">{med.name}</TableCell>
+                  <TableCell>{catName}</TableCell>
+                  <TableCell className="text-right">{(med.quantity ?? 0)} шт.</TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </div>
