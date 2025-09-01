@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { toast } from "@/hooks/use-toast";
 import { apiService } from "@/utils/api";
 import { Loader2, Plus, Truck, Package, AlertTriangle, RefreshCw, X, CheckCircle } from "lucide-react";
@@ -58,6 +59,12 @@ const Shipments = () => {
   const [branches, setBranches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
+
+  type SortOrder = 'new' | 'old';
+  type StatusFilter = 'all' | 'accepted' | 'declined';
+
+  const [sortOrder, setSortOrder] = useState<SortOrder>('new');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   
   const [formData, setFormData] = useState({
     to_branch_id: '',
@@ -260,6 +267,36 @@ const Shipments = () => {
     return device ? device.name : 'Неизвестное ИМН';
   };
 
+  const getDate = (t: any) =>
+    new Date(t?.date ?? t?.created_at ?? t?.createdAt ?? t?.created ?? 0);
+
+  const isAccepted = (t: any) =>
+    t?.status === 'accepted' || t?.accepted === true || t?.is_accepted === true;
+
+  const isDeclined = (t: any) =>
+    t?.status === 'declined' ||
+    t?.status === 'rejected' ||
+    t?.declined === true ||
+    t?.rejected === true ||
+    t?.is_declined === true ||
+    !!t?.decline_reason ||
+    !!t?.rejection_reason;
+
+  const viewShipments = React.useMemo(() => {
+    let list = Array.isArray(shipments) ? [...shipments] : [];
+
+    if (statusFilter === 'accepted') list = list.filter(isAccepted);
+    else if (statusFilter === 'declined') list = list.filter(isDeclined);
+
+    list.sort((a, b) => {
+      const da = getDate(a).getTime();
+      const db = getDate(b).getTime();
+      return sortOrder === 'new' ? db - da : da - db;
+    });
+
+    return list;
+  }, [shipments, sortOrder, statusFilter]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -270,8 +307,32 @@ const Shipments = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold">Отправки в филиалы</h1>
+      <h1 className="text-3xl font-bold">Отправки в филиалы</h1>
+
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+        <div className="flex flex-wrap gap-3">
+          {/* Sort */}
+          <ToggleGroup
+            type="single"
+            value={sortOrder}
+            onValueChange={(v) => v && setSortOrder(v as SortOrder)}
+          >
+            <ToggleGroupItem value="new">Сначала новые</ToggleGroupItem>
+            <ToggleGroupItem value="old">Сначала старые</ToggleGroupItem>
+          </ToggleGroup>
+
+          {/* Status */}
+          <ToggleGroup
+            type="single"
+            value={statusFilter}
+            onValueChange={(v) => v && setStatusFilter(v as StatusFilter)}
+          >
+            <ToggleGroupItem value="all">Все</ToggleGroupItem>
+            <ToggleGroupItem value="accepted">Принятые</ToggleGroupItem>
+            <ToggleGroupItem value="declined">Отклонено</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
+
         <Dialog open={dialogOpen} onOpenChange={(open) => {
           setDialogOpen(open);
           if (!open) resetForm();
@@ -432,7 +493,7 @@ const Shipments = () => {
         </Card>
       ) : (
         <div className="grid gap-4">
-          {shipments.map((shipment) => (
+          {viewShipments.map((shipment) => (
             <Card key={shipment.id}>
               <CardHeader>
                 <div className="flex justify-between items-start">
