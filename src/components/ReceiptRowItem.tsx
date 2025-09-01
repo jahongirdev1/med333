@@ -15,12 +15,8 @@ export interface ReceiptRow {
   id: string;
   itemType: 'medicine' | 'medical_device';
   itemId: string | null;
+  itemName: string;
   qty: number;
-  purchasePrice: number;
-  sellPrice: number;
-  batchNumber?: string | null;
-  expiryDate?: string | null;
-  uom?: string | null;
 }
 
 interface Item {
@@ -50,12 +46,16 @@ const ReceiptRowItem: React.FC<ReceiptRowItemProps> = ({
   const addedQuantity = row.itemId ? getAddedQuantity(row.itemType, row.itemId) : 0;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-6 gap-4 p-4 bg-gray-50 rounded-lg">
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 bg-gray-50 rounded-lg">
       <div>
         <Label>Тип</Label>
         <Select
           value={row.itemType}
-          onValueChange={(value) => onUpdate(row.id, 'itemType', value)}
+          onValueChange={(value) => {
+            onUpdate(row.id, 'itemType', value);
+            onUpdate(row.id, 'itemId', null);
+            onUpdate(row.id, 'itemName', '');
+          }}
         >
           <SelectTrigger>
             <SelectValue />
@@ -70,7 +70,11 @@ const ReceiptRowItem: React.FC<ReceiptRowItemProps> = ({
         <Label>{row.itemType === 'medicine' ? 'Лекарство' : 'ИМН'}</Label>
         <Select
           value={row.itemId ?? ''}
-          onValueChange={(value) => onUpdate(row.id, 'itemId', value)}
+          onValueChange={(value) => {
+            onUpdate(row.id, 'itemId', value);
+            const item = items.find((i) => i.id === value);
+            onUpdate(row.id, 'itemName', item ? item.name : '');
+          }}
         >
           <SelectTrigger>
             <SelectValue
@@ -101,28 +105,6 @@ const ReceiptRowItem: React.FC<ReceiptRowItemProps> = ({
           value={row.qty}
           onChange={(e) => onUpdate(row.id, 'qty', Number(e.target.value))}
           placeholder="Количество"
-        />
-      </div>
-      <div>
-        <Label>Цена приходная (₸)</Label>
-        <Input
-          type="number"
-          min="0"
-          step="0.01"
-          value={row.purchasePrice}
-          onChange={(e) => onUpdate(row.id, 'purchasePrice', Number(e.target.value))}
-          placeholder="0.00"
-        />
-      </div>
-      <div>
-        <Label>Цена продажная (₸)</Label>
-        <Input
-          type="number"
-          min="0"
-          step="0.01"
-          value={row.sellPrice}
-          onChange={(e) => onUpdate(row.id, 'sellPrice', Number(e.target.value))}
-          placeholder="0.00"
         />
       </div>
       <div className="flex items-end">

@@ -47,9 +47,8 @@ const AdminArrivals: React.FC = () => {
         id: uid(),
         itemType: type,
         itemId: null,
+        itemName: '',
         qty: 1,
-        purchasePrice: 0,
-        sellPrice: 0,
       },
     ]);
   };
@@ -67,12 +66,6 @@ const AdminArrivals: React.FC = () => {
       .filter((r) => r.itemType === itemType && r.itemId === itemId)
       .reduce((sum, r) => sum + r.qty, 0);
 
-  const resolveNameByType = (itemType: ItemType, itemId: string | null) => {
-    if (!itemId) return '';
-    const list = itemType === 'medicine' ? medicines : devices;
-    return list.find((i: any) => i.id === itemId)?.name || '';
-  };
-
   const validateRows = () => {
     for (const r of rows) {
       if (!r.itemId) {
@@ -83,27 +76,20 @@ const AdminArrivals: React.FC = () => {
         toast({ title: 'Ошибка', description: 'Количество должно быть больше 0', variant: 'destructive' });
         return false;
       }
-      if (r.purchasePrice < 0 || r.sellPrice < 0) {
-        toast({ title: 'Ошибка', description: 'Цены не могут быть отрицательными', variant: 'destructive' });
-        return false;
-      }
     }
     return true;
   };
 
   const saveRows = async () => {
     if (!validateRows()) return;
-    const payload = {
-      arrivals: rows.map((r) => ({
+    const res = await apiService.createArrivals(
+      rows.map((r) => ({
         item_type: r.itemType,
-        item_id: r.itemId,
-        item_name: resolveNameByType(r.itemType, r.itemId),
+        item_id: r.itemId!,
+        item_name: r.itemName,
         quantity: r.qty,
-        purchase_price: r.purchasePrice,
-        sell_price: r.sellPrice,
-      })),
-    };
-    const res = await apiService.createArrivals(payload);
+      }))
+    );
     if (!res.error) {
       setRows([]);
       fetchArrivals();

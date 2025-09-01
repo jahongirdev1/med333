@@ -197,15 +197,17 @@ class ApiService {
   }
 
   // Arrivals
-  async getArrivals(itemType?: string) {
+  // GET arrivals (optional filter by type)
+  getArrivals(itemType?: string) {
     const params = itemType ? `?item_type=${itemType}` : '';
     return this.request<any[]>(`/arrivals${params}`);
   }
 
-  async createArrivals(payload: { arrivals: any[] }) {
+  // POST arrivals
+  createArrivals(arrivals: any[]) {
     return this.request<any>('/arrivals', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ arrivals }),
     });
   }
 

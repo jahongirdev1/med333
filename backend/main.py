@@ -96,6 +96,31 @@ def ensure_medicines_category_fk():
                 )
 
 
+def ensure_arrivals_schema():
+    with engine.begin() as conn:
+        insp = inspect(conn)
+        cols = {c["name"] for c in insp.get_columns("arrivals")}
+
+        if "item_type" not in cols:
+            conn.exec_driver_sql("ALTER TABLE arrivals ADD COLUMN item_type varchar")
+        if "item_id" not in cols:
+            conn.exec_driver_sql("ALTER TABLE arrivals ADD COLUMN item_id varchar")
+        if "item_name" not in cols:
+            conn.exec_driver_sql("ALTER TABLE arrivals ADD COLUMN item_name varchar")
+
+        # prices are not part of arrivals anymore
+        if "purchase_price" in cols:
+            conn.exec_driver_sql("ALTER TABLE arrivals DROP COLUMN purchase_price")
+        if "sell_price" in cols:
+            conn.exec_driver_sql("ALTER TABLE arrivals DROP COLUMN sell_price")
+
+        # legacy columns from old implementation
+        if "medicine_id" in cols:
+            conn.exec_driver_sql("ALTER TABLE arrivals DROP COLUMN medicine_id")
+        if "medicine_name" in cols:
+            conn.exec_driver_sql("ALTER TABLE arrivals DROP COLUMN medicine_name")
+
+
 # Create FastAPI app
 app = FastAPI(title="Warehouse Management System")
 
@@ -150,6 +175,7 @@ async def startup_event():
 
     ensure_medicines_category_fk()
     ensure_schema_patches()
+    ensure_arrivals_schema()
     # Ensure all existing medicines have a valid category and enforce NOT NULL constraint
     try:
         db.execute(
@@ -991,44 +1017,42 @@ async def create_dispensing_record(request: dict, db: Session = Depends(get_db))
 # Arrival endpoints
 @app.get("/arrivals")
 async def get_arrivals(item_type: Optional[str] = None, db: Session = Depends(get_db)):
-    query = db.query(DBArrival)
+    q = db.query(DBArrival)
     if item_type:
-        query = query.filter(DBArrival.item_type == item_type)
-    arrivals = query.all()
-    return {"data": [Arrival.model_validate(arrival) for arrival in arrivals]}
+        q = q.filter(DBArrival.item_type == item_type)
+    rows = q.all()
+    return {"data": [Arrival.model_validate(x) for x in rows]}
 
 @app.post("/arrivals")
 async def create_arrivals(batch: BatchArrivalCreate, db: Session = Depends(get_db)):
     try:
-        for arrival_data in batch.arrivals:
-            db_arrival = DBArrival(
+        for it in batch.arrivals:
+            db.add(DBArrival(
                 id=str(uuid.uuid4()),
-                item_type=arrival_data.item_type,
-                item_id=arrival_data.item_id,
-                item_name=arrival_data.item_name,
-                quantity=arrival_data.quantity,
-                purchase_price=arrival_data.purchase_price,
-                sell_price=arrival_data.sell_price,
-            )
-            db.add(db_arrival)
+                item_type=it.item_type,
+                item_id=it.item_id,
+                item_name=it.item_name,
+                quantity=it.quantity,
+            ))
 
-            if arrival_data.item_type == "medicine":
-                item = db.query(DBMedicine).filter(
-                    DBMedicine.id == arrival_data.item_id,
+            # increase stock on MAIN warehouse (branch_id IS NULL)
+            if it.item_type == "medicine":
+                stock = db.query(DBMedicine).filter(
+                    DBMedicine.id == it.item_id,
                     DBMedicine.branch_id.is_(None),
                 ).first()
-            elif arrival_data.item_type == "medical_device":
-                item = db.query(DBMedicalDevice).filter(
-                    DBMedicalDevice.id == arrival_data.item_id,
+            elif it.item_type == "medical_device":
+                stock = db.query(DBMedicalDevice).filter(
+                    DBMedicalDevice.id == it.item_id,
                     DBMedicalDevice.branch_id.is_(None),
                 ).first()
             else:
                 raise HTTPException(status_code=400, detail="Invalid item_type")
 
-            if item:
-                item.quantity += arrival_data.quantity
-                item.purchase_price = arrival_data.purchase_price
-                item.sell_price = arrival_data.sell_price
+            if not stock:
+                raise HTTPException(status_code=404, detail="Item not found")
+
+            stock.quantity += it.quantity  # do not modify prices here
 
         db.commit()
         return {"message": "Arrivals created successfully"}
@@ -1103,8 +1127,6 @@ async def generate_report(request: ReportRequest, db: Session = Depends(get_db))
                     "item_type": arrival.item_type,
                     "item_name": arrival.item_name,
                     "quantity": arrival.quantity,
-                    "purchase_price": arrival.purchase_price,
-                    "sell_price": arrival.sell_price,
                     "date": arrival.date.isoformat()
                 })
         

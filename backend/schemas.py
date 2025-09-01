@@ -163,12 +163,10 @@ class Dispensing(DispensingBase):
 
 # Arrival schemas
 class ArrivalBase(BaseModel):
-    item_type: str  # 'medicine' or 'medical_device'
+    item_type: str        # 'medicine' or 'medical_device'
     item_id: str
     item_name: str
     quantity: int
-    purchase_price: float
-    sell_price: float
 
 class ArrivalCreate(ArrivalBase):
     pass
