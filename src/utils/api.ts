@@ -415,12 +415,9 @@ class ApiService {
   // Create dispensing record
   async createDispensingRecord(body: {
     patient_id: string;
-    patient_name: string;
     employee_id: string;
-    employee_name: string;
     branch_id: string;
-    medicines: { id: string; name: string; quantity: number }[];
-    medical_devices: { id: string; name: string; quantity: number }[];
+    items: { type: 'medicine' | 'medical_device'; item_id: string; quantity: number }[];
   }) {
     return this.request<any>('/dispensing', {
       method: 'POST',
