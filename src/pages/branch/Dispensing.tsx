@@ -126,7 +126,19 @@ const Dispensing: React.FC = () => {
     try {
       const response = await apiService.createDispensingRecord(payload);
       if (response.error) {
-        toast({ title: 'Ошибка', description: response.error, variant: 'destructive' });
+        try {
+          const detail = JSON.parse(response.error);
+          if (detail.code === 'insufficient_stock') {
+            const msg = detail.items
+              .map((i: any) => `${i.type}: запрошено ${i.requested}, доступно ${i.available}`)
+              .join('\n');
+            toast({ title: 'Недостаточно товаров', description: msg, variant: 'destructive' });
+          } else {
+            toast({ title: 'Ошибка', description: response.error, variant: 'destructive' });
+          }
+        } catch {
+          toast({ title: 'Ошибка', description: response.error, variant: 'destructive' });
+        }
         return;
       }
 

@@ -17,19 +17,27 @@ class ApiService {
   ): Promise<ApiResponse<T>> {
     try {
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...options.headers,
-        },
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
         ...options,
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        let detail = `HTTP error! status: ${response.status}`;
+        try {
+          const maybeJson = await response.json();
+          if (maybeJson?.detail) {
+            detail = typeof maybeJson.detail === 'string'
+              ? maybeJson.detail
+              : JSON.stringify(maybeJson.detail);
+          }
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
       }
 
-      const data = await response.json();
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : null;
       return { data };
     } catch (error) {
       console.error(`API Error (${endpoint}):`, error);

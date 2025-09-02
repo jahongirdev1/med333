@@ -237,10 +237,6 @@ class DispensePayload(BaseModel):
             normalized.append(
                 DispenseLine(item_id=d.id, quantity=d.quantity, item_type="medical_device")
             )
-
-        if not normalized:
-            raise ValueError("No items to dispense")
-
         object.__setattr__(self, "_normalized_items", normalized)
         return self
 
