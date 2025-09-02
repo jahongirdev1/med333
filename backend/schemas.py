@@ -1,7 +1,8 @@
 
-from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing import Optional, List, Literal
 from datetime import datetime
+from uuid import UUID
 
 # User schemas
 class UserBase(BaseModel):
@@ -186,6 +187,64 @@ class BatchDispensingCreate(BaseModel):
 
 class BatchArrivalCreate(BaseModel):
     arrivals: List[ArrivalCreate]
+
+
+# New dispensing payload models supporting legacy and new shapes
+class DispenseLine(BaseModel):
+    item_id: UUID = Field(..., alias="id")
+    quantity: int = Field(..., ge=0)
+    item_type: Literal["medicine", "medical_device"] = Field(..., alias="type")
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+
+class MedicineLine(BaseModel):
+    id: UUID
+    name: Optional[str] = None
+    quantity: int = Field(..., ge=0)
+
+
+class DeviceLine(BaseModel):
+    id: UUID
+    name: Optional[str] = None
+    quantity: int = Field(..., ge=0)
+
+
+class DispensePayload(BaseModel):
+    patient_id: UUID
+    employee_id: UUID
+    branch_id: UUID
+
+    # legacy shape
+    items: List[DispenseLine] = []
+
+    # new shape
+    medicines: List[MedicineLine] = []
+    medical_devices: List[DeviceLine] = []
+
+    # optional display fields
+    patient_name: Optional[str] = None
+    employee_name: Optional[str] = None
+
+    @model_validator(mode="after")
+    def normalize(self):
+        normalized: List[DispenseLine] = list(self.items)
+        for m in self.medicines:
+            normalized.append(
+                DispenseLine(item_id=m.id, quantity=m.quantity, item_type="medicine")
+            )
+        for d in self.medical_devices:
+            normalized.append(
+                DispenseLine(item_id=d.id, quantity=d.quantity, item_type="medical_device")
+            )
+
+        if not normalized:
+            raise ValueError("No items to dispense")
+
+        object.__setattr__(self, "_normalized_items", normalized)
+        return self
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
 # Medical Device Category schemas
 class MedicalDeviceCategoryBase(BaseModel):

@@ -934,85 +934,70 @@ async def get_dispensing_records(branch_id: Optional[str] = None, db: Session = 
     return {"data": result}
 
 @app.post("/dispensing")
-async def create_dispensing_record(request: dict, db: Session = Depends(get_db)):
+async def create_dispensing_record(body: DispensePayload, db: Session = Depends(get_db)):
+    items: list[DispenseLine] = body._normalized_items
+
+    patient = db.query(DBPatient).filter(DBPatient.id == str(body.patient_id)).first()
+    employee = db.query(DBEmployee).filter(DBEmployee.id == str(body.employee_id)).first()
+    if not patient or not employee:
+        raise HTTPException(status_code=404, detail="Patient or employee not found")
+
+    record_id = str(uuid.uuid4())
     try:
-        patient_id = request["patient_id"]
-        employee_id = request["employee_id"]
-        branch_id = request["branch_id"]
-        items = request["items"]
-        
-        # Get patient and employee names
-        patient = db.query(DBPatient).filter(DBPatient.id == patient_id).first()
-        employee = db.query(DBEmployee).filter(DBEmployee.id == employee_id).first()
-        
-        if not patient or not employee:
-            raise HTTPException(status_code=404, detail="Patient or employee not found")
-        
-        # Create dispensing record
-        record_id = str(uuid.uuid4())
         db_record = DBDispensingRecord(
             id=record_id,
-            patient_id=patient_id,
+            patient_id=str(body.patient_id),
             patient_name=f"{patient.first_name} {patient.last_name}",
-            employee_id=employee_id,
+            employee_id=str(body.employee_id),
             employee_name=f"{employee.first_name} {employee.last_name}",
-            branch_id=branch_id
+            branch_id=str(body.branch_id),
         )
         db.add(db_record)
-        
-        # Process items
-        for item in items:
-            if item["type"] == "medicine":
-                # Decrease medicine quantity
-                medicine = db.query(DBMedicine).filter(
-                    DBMedicine.id == item["id"],
-                    DBMedicine.branch_id == branch_id
-                ).first()
-                
-                if not medicine or medicine.quantity < item["quantity"]:
-                    raise HTTPException(status_code=400, detail=f"Insufficient quantity for {item['name']}")
-                
-                medicine.quantity -= item["quantity"]
-                
-                # Create dispensing item
-                db_item = DBDispensingItem(
+
+        for line in items:
+            if line.item_type == "medicine":
+                stock = db.query(DBMedicine).filter(
+                    DBMedicine.id == str(line.item_id),
+                    DBMedicine.branch_id == str(body.branch_id),
+                ).with_for_update().first()
+                if not stock or stock.quantity < line.quantity:
+                    raise HTTPException(
+                        status_code=400, detail=f"Not enough medicine stock: {line.item_id}"
+                    )
+                stock.quantity -= line.quantity
+                item_name = stock.name
+            else:
+                stock = db.query(DBMedicalDevice).filter(
+                    DBMedicalDevice.id == str(line.item_id),
+                    DBMedicalDevice.branch_id == str(body.branch_id),
+                ).with_for_update().first()
+                if not stock or stock.quantity < line.quantity:
+                    raise HTTPException(
+                        status_code=400, detail=f"Not enough medical device stock: {line.item_id}"
+                    )
+                stock.quantity -= line.quantity
+                item_name = stock.name
+
+            db.add(
+                DBDispensingItem(
                     id=str(uuid.uuid4()),
                     record_id=record_id,
-                    item_type="medicine",
-                    item_id=item["id"],
-                    item_name=item["name"],
-                    quantity=item["quantity"]
+                    item_type=line.item_type,
+                    item_id=str(line.item_id),
+                    item_name=item_name,
+                    quantity=line.quantity,
                 )
-                db.add(db_item)
-            
-            elif item["type"] == "medical_device":
-                # Decrease medical device quantity
-                device = db.query(DBMedicalDevice).filter(
-                    DBMedicalDevice.id == item["id"],
-                    DBMedicalDevice.branch_id == branch_id
-                ).first()
-                
-                if not device or device.quantity < item["quantity"]:
-                    raise HTTPException(status_code=400, detail=f"Insufficient quantity for {item['name']}")
-                
-                device.quantity -= item["quantity"]
-                
-                # Create dispensing item
-                db_item = DBDispensingItem(
-                    id=str(uuid.uuid4()),
-                    record_id=record_id,
-                    item_type="medical_device",
-                    item_id=item["id"],
-                    item_name=item["name"],
-                    quantity=item["quantity"]
-                )
-                db.add(db_item)
-        
+            )
+
         db.commit()
-        return {"message": "Dispensing record created successfully"}
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to create dispensing") from e
+
+    return {"ok": True, "id": record_id}
 
 # Arrival endpoints
 @app.get("/arrivals")
