@@ -415,13 +415,38 @@ class ApiService {
   // Create dispensing record
   async createDispensingRecord(body: {
     patient_id: string;
+    patient_name?: string;
     employee_id: string;
+    employee_name?: string;
     branch_id: string;
-    items: { type: 'medicine' | 'medical_device'; item_id: string; quantity: number }[];
+    medicines: { id: string; name?: string; quantity: number }[];
+    medical_devices: { id: string; name?: string; quantity: number }[];
   }) {
     return this.request<any>('/dispensing', {
       method: 'POST',
       body: JSON.stringify(body),
+    });
+  }
+
+  // Legacy compatibility
+  async createDispensingRecordLegacy(payload: {
+    patient_id: string;
+    employee_id: string;
+    branch_id: string;
+    items: { type: 'medicine' | 'medical_device'; item_id: string; quantity: number }[];
+  }) {
+    const medicines = payload.items
+      .filter(i => i.type === 'medicine')
+      .map(i => ({ id: i.item_id, quantity: i.quantity }));
+    const medical_devices = payload.items
+      .filter(i => i.type === 'medical_device')
+      .map(i => ({ id: i.item_id, quantity: i.quantity }));
+    return this.createDispensingRecord({
+      patient_id: payload.patient_id,
+      employee_id: payload.employee_id,
+      branch_id: payload.branch_id,
+      medicines,
+      medical_devices,
     });
   }
 
