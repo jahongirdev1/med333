@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, PrivateAttr
 from typing import Optional, List, Literal
 from datetime import datetime
 from uuid import UUID
@@ -226,18 +226,26 @@ class DispensePayload(BaseModel):
     patient_name: Optional[str] = None
     employee_name: Optional[str] = None
 
+
+    _normalized_items: List[DispenseLine] = PrivateAttr(default_factory=list)
+
     @model_validator(mode="after")
     def normalize(self):
-        normalized: List[DispenseLine] = list(self.items)
+        normalized: List[DispenseLine] = []
+        for line in self.items:
+            if line.quantity > 0:
+                normalized.append(line)
         for m in self.medicines:
-            normalized.append(
-                DispenseLine(item_id=m.id, quantity=m.quantity, item_type="medicine")
-            )
+            if m.quantity > 0:
+                normalized.append(
+                    DispenseLine(item_id=m.id, quantity=m.quantity, item_type="medicine")
+                )
         for d in self.medical_devices:
-            normalized.append(
-                DispenseLine(item_id=d.id, quantity=d.quantity, item_type="medical_device")
-            )
-        object.__setattr__(self, "_normalized_items", normalized)
+            if d.quantity > 0:
+                normalized.append(
+                    DispenseLine(item_id=d.id, quantity=d.quantity, item_type="medical_device")
+                )
+        self._normalized_items = normalized
         return self
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
