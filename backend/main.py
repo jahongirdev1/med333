@@ -9,6 +9,7 @@ from typing import List, Optional
 from datetime import datetime
 import uuid
 import json
+from pydantic import ValidationError
 
 def ensure_schema_patches():
     with engine.begin() as conn:
@@ -933,14 +934,54 @@ async def get_dispensing_records(branch_id: Optional[str] = None, db: Session = 
     
     return {"data": result}
 
-@app.post("/dispensing")
-async def create_dispensing_record(body: DispensePayload, db: Session = Depends(get_db)):
+@app.post("/dispensing", status_code=status.HTTP_201_CREATED)
+async def create_dispensing_record(payload: dict, db: Session = Depends(get_db)):
+    try:
+        body = DispensePayload.model_validate(payload)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+
     items: list[DispenseLine] = body._normalized_items
+    if not items:
+        raise HTTPException(status_code=400, detail="No items with quantity > 0")
 
     patient = db.query(DBPatient).filter(DBPatient.id == str(body.patient_id)).first()
     employee = db.query(DBEmployee).filter(DBEmployee.id == str(body.employee_id)).first()
     if not patient or not employee:
         raise HTTPException(status_code=404, detail="Patient or employee not found")
+
+    insufficient: list[dict] = []
+    stocks: dict[tuple[str, str], any] = {}
+    for line in items:
+        if line.item_type == "medicine":
+            stock = db.query(DBMedicine).filter(
+                DBMedicine.id == str(line.item_id),
+                DBMedicine.branch_id == str(body.branch_id),
+            ).with_for_update().first()
+        else:
+            stock = db.query(DBMedicalDevice).filter(
+                DBMedicalDevice.id == str(line.item_id),
+                DBMedicalDevice.branch_id == str(body.branch_id),
+            ).with_for_update().first()
+
+        if not stock or stock.quantity < line.quantity:
+            available = stock.quantity if stock else 0
+            insufficient.append(
+                {
+                    "type": line.item_type,
+                    "id": str(line.item_id),
+                    "available": available,
+                    "requested": line.quantity,
+                }
+            )
+        else:
+            stocks[(line.item_type, str(line.item_id))] = stock
+
+    if insufficient:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "insufficient_stock", "items": insufficient},
+        )
 
     record_id = str(uuid.uuid4())
     try:
@@ -955,36 +996,15 @@ async def create_dispensing_record(body: DispensePayload, db: Session = Depends(
         db.add(db_record)
 
         for line in items:
-            if line.item_type == "medicine":
-                stock = db.query(DBMedicine).filter(
-                    DBMedicine.id == str(line.item_id),
-                    DBMedicine.branch_id == str(body.branch_id),
-                ).with_for_update().first()
-                if not stock or stock.quantity < line.quantity:
-                    raise HTTPException(
-                        status_code=400, detail=f"Not enough medicine stock: {line.item_id}"
-                    )
-                stock.quantity -= line.quantity
-                item_name = stock.name
-            else:
-                stock = db.query(DBMedicalDevice).filter(
-                    DBMedicalDevice.id == str(line.item_id),
-                    DBMedicalDevice.branch_id == str(body.branch_id),
-                ).with_for_update().first()
-                if not stock or stock.quantity < line.quantity:
-                    raise HTTPException(
-                        status_code=400, detail=f"Not enough medical device stock: {line.item_id}"
-                    )
-                stock.quantity -= line.quantity
-                item_name = stock.name
-
+            stock = stocks[(line.item_type, str(line.item_id))]
+            stock.quantity -= line.quantity
             db.add(
                 DBDispensingItem(
                     id=str(uuid.uuid4()),
                     record_id=record_id,
                     item_type=line.item_type,
                     item_id=str(line.item_id),
-                    item_name=item_name,
+                    item_name=stock.name,
                     quantity=line.quantity,
                 )
             )
@@ -997,7 +1017,13 @@ async def create_dispensing_record(body: DispensePayload, db: Session = Depends(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create dispensing") from e
 
-    return {"ok": True, "id": record_id}
+    return {
+        "id": record_id,
+        "items": [
+            {"type": l.item_type, "id": str(l.item_id), "quantity": l.quantity}
+            for l in items
+        ],
+    }
 
 # Arrival endpoints
 @app.get("/arrivals")
