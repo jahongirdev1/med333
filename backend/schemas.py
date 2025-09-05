@@ -191,7 +191,7 @@ class BatchArrivalCreate(BaseModel):
 
 # New dispensing payload models supporting legacy and new shapes
 class DispenseLine(BaseModel):
-    item_id: UUID = Field(..., alias="id")
+    item_id: str = Field(..., alias="id")
     quantity: int = Field(..., ge=0)
     item_type: Literal["medicine", "medical_device"] = Field(..., alias="type")
 
@@ -199,21 +199,21 @@ class DispenseLine(BaseModel):
 
 
 class MedicineLine(BaseModel):
-    id: UUID
+    id: str
     name: Optional[str] = None
     quantity: int = Field(..., ge=0)
 
 
 class DeviceLine(BaseModel):
-    id: UUID
+    id: str
     name: Optional[str] = None
     quantity: int = Field(..., ge=0)
 
 
 class DispensePayload(BaseModel):
-    patient_id: UUID
-    employee_id: UUID
-    branch_id: UUID
+    patient_id: str
+    employee_id: str
+    branch_id: str
 
     # legacy shape
     items: List[DispenseLine] = []
