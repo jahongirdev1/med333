@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { storage } from '@/utils/storage';
 import { apiService } from '@/utils/api';
 import { Calendar as CalendarIcon, Users, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -13,9 +13,22 @@ const Calendar: React.FC = () => {
   const branchId = currentUser?.branchId;
   
   const [patients, setPatients] = useState<any[]>([]);
-  const [selectedPatient, setSelectedPatient] = useState<string | undefined>(undefined);
+  const [selectedPatientId, setSelectedPatientId] = useState<string>('');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dispensingData, setDispensingData] = useState<any>({});
+  const eventsByDay = useMemo(() => {
+    if (!selectedPatientId) return {};
+    const filtered: Record<number, any[]> = {};
+    Object.keys(dispensingData).forEach((day) => {
+      const events = (dispensingData[day] || []).filter(
+        (event: any) => String(event.patient_id ?? event.patientId) === selectedPatientId,
+      );
+      if (events.length) {
+        filtered[Number(day)] = events;
+      }
+    });
+    return filtered;
+  }, [dispensingData, selectedPatientId]);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [dayDetails, setDayDetails] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,7 +39,7 @@ const Calendar: React.FC = () => {
 
   useEffect(() => {
     fetchCalendarData();
-  }, [currentDate, selectedPatient]);
+  }, [currentDate, selectedPatientId]);
 
   const fetchData = async () => {
     if (!branchId) return;
@@ -76,13 +89,13 @@ const Calendar: React.FC = () => {
   };
 
   const hasDispensings = (day: number) => {
-    return dispensingData[day] && dispensingData[day].length > 0;
+    return eventsByDay[day] && eventsByDay[day].length > 0;
   };
 
   const handleDayClick = (day: number) => {
     if (hasDispensings(day)) {
       setSelectedDay(day);
-      setDayDetails(dispensingData[day] || []);
+      setDayDetails(eventsByDay[day] || []);
     }
   };
 
@@ -132,7 +145,7 @@ const Calendar: React.FC = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <Select value={selectedPatient ?? undefined} onValueChange={setSelectedPatient}>
+              <Select value={selectedPatientId || undefined} onValueChange={(v) => setSelectedPatientId(v === 'all' ? '' : v)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Все пациенты" />
                 </SelectTrigger>
