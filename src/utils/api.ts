@@ -395,11 +395,24 @@ class ApiService {
   }
 
   // Calendar
-  async getDispensingCalendar(branchId?: string) {
-    let url = '/calendar/dispensing';
-    if (branchId) {
-      url += `?branch_id=${branchId}`;
+  async getDispensingCalendar(params: {
+    branch_id: string;
+    month: string;
+    patient_id?: string;
+  }) {
+    let url = `/calendar/dispensing?branch_id=${params.branch_id}&month=${params.month}`;
+    if (params.patient_id) {
+      url += `&patient_id=${params.patient_id}`;
     }
+    const res = await this.request<any>(url);
+    if (res.data && 'data' in res.data) {
+      return { data: res.data.data };
+    }
+    return res;
+  }
+
+  async getDispensingDayDetails(branchId: string, patientId: string, date: string) {
+    const url = `/calendar/dispensing/day?branch_id=${branchId}&patient_id=${patientId}&date=${date}`;
     const res = await this.request<any>(url);
     if (res.data && 'data' in res.data) {
       return { data: res.data.data };

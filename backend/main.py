@@ -1,12 +1,13 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
 from sqlalchemy import inspect
 from database import get_db, create_tables, engine, User as DBUser, Branch as DBBranch, Medicine as DBMedicine, Employee as DBEmployee, Patient as DBPatient, Transfer as DBTransfer, DispensingRecord as DBDispensingRecord, DispensingItem as DBDispensingItem, Arrival as DBArrival, Category as DBCategory, MedicalDevice as DBMedicalDevice, Shipment as DBShipment, ShipmentItem as DBShipmentItem, Notification as DBNotification
 from schemas import *
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import uuid
 import json
 from pydantic import ValidationError
@@ -1232,33 +1233,109 @@ async def generate_report(request: ReportRequest, db: Session = Depends(get_db))
 
 # Calendar endpoints
 @app.get("/calendar/dispensing")
-async def get_calendar_dispensing(branch_id: Optional[str] = None, month: Optional[int] = None, year: Optional[int] = None, db: Session = Depends(get_db)):
+async def get_calendar_dispensing(
+    branch_id: str,
+    month: str,
+    patient_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return days with dispensing records for a branch and optional patient."""
     try:
-        query = db.query(DBDispensingRecord)
-        if branch_id:
-            query = query.filter(DBDispensingRecord.branch_id == branch_id)
-        if month and year:
-            query = query.filter(
-                db.extract('month', DBDispensingRecord.date) == month,
-                db.extract('year', DBDispensingRecord.date) == year
-            )
-        
+        tz = ZoneInfo("Asia/Almaty")
+        start_local = datetime.strptime(month, "%Y-%m").replace(
+            tzinfo=tz, day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        if start_local.month == 12:
+            end_local = start_local.replace(year=start_local.year + 1, month=1)
+        else:
+            end_local = start_local.replace(month=start_local.month + 1)
+        start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+        end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+
+        query = db.query(DBDispensingRecord).filter(
+            DBDispensingRecord.branch_id == branch_id,
+            DBDispensingRecord.date >= start_utc,
+            DBDispensingRecord.date < end_utc,
+        )
+        if patient_id:
+            query = query.filter(DBDispensingRecord.patient_id == patient_id)
+
         records = query.all()
         calendar_data = {}
-        
         for record in records:
-            day = record.date.day
-            if day not in calendar_data:
-                calendar_data[day] = []
-            
-            calendar_data[day].append({
-                "id": record.id,
-                "patient_name": record.patient_name,
-                "employee_name": record.employee_name,
-                "time": record.date.strftime("%H:%M")
-            })
-        
+            record_dt = record.date
+            if record_dt.tzinfo is None:
+                record_dt = record_dt.replace(tzinfo=timezone.utc)
+            local_dt = record_dt.astimezone(tz)
+            day_key = str(local_dt.day)
+            if day_key not in calendar_data:
+                calendar_data[day_key] = []
+            calendar_data[day_key].append(
+                {
+                    "id": record.id,
+                    "created_at": record.date.isoformat(),
+                    "patient_id": record.patient_id,
+                    "employee_name": record.employee_name,
+                }
+            )
+
         return {"data": calendar_data}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/calendar/dispensing/day")
+async def get_calendar_dispensing_day(
+    branch_id: str,
+    patient_id: str,
+    date: str,
+    db: Session = Depends(get_db),
+):
+    """Return dispensing details for a specific patient on a given day."""
+    try:
+        tz = ZoneInfo("Asia/Almaty")
+        day_local = datetime.strptime(date, "%Y-%m-%d").replace(
+            tzinfo=tz, hour=0, minute=0, second=0, microsecond=0
+        )
+        next_day_local = day_local + timedelta(days=1)
+        start_utc = day_local.astimezone(timezone.utc).replace(tzinfo=None)
+        end_utc = next_day_local.astimezone(timezone.utc).replace(tzinfo=None)
+
+        records = (
+            db.query(DBDispensingRecord)
+            .options(joinedload(DBDispensingRecord.items))
+            .filter(
+                DBDispensingRecord.branch_id == branch_id,
+                DBDispensingRecord.patient_id == patient_id,
+                DBDispensingRecord.date >= start_utc,
+                DBDispensingRecord.date < end_utc,
+            )
+            .order_by(DBDispensingRecord.date.asc())
+            .all()
+        )
+
+        result = []
+        for record in records:
+            record_dt = record.date
+            if record_dt.tzinfo is None:
+                record_dt = record_dt.replace(tzinfo=timezone.utc)
+            local_dt = record_dt.astimezone(tz)
+            result.append(
+                {
+                    "time": local_dt.strftime("%H:%M"),
+                    "employee_name": record.employee_name,
+                    "items": [
+                        {
+                            "type": item.item_type,
+                            "name": item.item_name,
+                            "quantity": item.quantity,
+                        }
+                        for item in record.items
+                    ],
+                }
+            )
+
+        return {"data": result}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
