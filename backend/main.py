@@ -695,6 +695,40 @@ async def get_shipments(branch_id: Optional[str] = None, db: Session = Depends(g
     
     return {"data": result}
 
+@app.get("/dispensing_records/{record_id}")
+async def get_dispensing_record_detail(record_id: str, db: Session = Depends(get_db)):
+    record = (
+        db.query(DBDispensingRecord, DBBranch)
+        .join(DBBranch, DBDispensingRecord.branch_id == DBBranch.id)
+        .filter(DBDispensingRecord.id == record_id)
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    rec, branch = record
+    items = db.query(DBDispensingItem).filter(DBDispensingItem.record_id == record_id).all()
+    tz = ZoneInfo("Asia/Almaty")
+    dt = rec.date
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local_dt = dt.astimezone(tz)
+    data = {
+        "id": rec.id,
+        "time": local_dt.strftime("%H:%M:%S"),
+        "patient_name": rec.patient_name,
+        "employee_name": rec.employee_name,
+        "branch_name": branch.name if branch else "",
+        "items": [
+            {
+                "type": item.item_type,
+                "name": item.item_name,
+                "quantity": item.quantity,
+            }
+            for item in items
+        ],
+    }
+    return {"data": data}
+
 @app.post("/shipments")
 async def create_shipment(shipment_data: dict, db: Session = Depends(get_db)):
     try:
@@ -1234,14 +1268,89 @@ async def generate_report(request: ReportRequest, db: Session = Depends(get_db))
 # Calendar endpoints
 @app.get("/calendar/dispensing")
 async def get_calendar_dispensing(
-    branch_id: str,
-    month: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    date: Optional[str] = None,
+    branch_id: Optional[str] = None,
+    aggregate: Optional[int] = None,
+    # legacy params
+    month: Optional[str] = None,
     patient_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """Return days with dispensing records for a branch and optional patient."""
+    """Calendar dispensing endpoint supporting summary and day listing."""
     try:
         tz = ZoneInfo("Asia/Almaty")
+
+        # Aggregate mode: monthly summary
+        if aggregate == 1 and start and end:
+            start_local = datetime.strptime(start, "%Y-%m-%d").replace(
+                tzinfo=tz, hour=0, minute=0, second=0, microsecond=0
+            )
+            end_local = datetime.strptime(end, "%Y-%m-%d").replace(
+                tzinfo=tz, hour=0, minute=0, second=0, microsecond=0
+            ) + timedelta(days=1)
+            start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+            end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+            query = db.query(DBDispensingRecord).filter(
+                DBDispensingRecord.date >= start_utc,
+                DBDispensingRecord.date < end_utc,
+            )
+            if branch_id:
+                query = query.filter(DBDispensingRecord.branch_id == branch_id)
+            records = query.all()
+            counts: dict[str, int] = {}
+            for rec in records:
+                dt = rec.date
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                local_dt = dt.astimezone(tz)
+                key = local_dt.strftime("%Y-%m-%d")
+                counts[key] = counts.get(key, 0) + 1
+            data = [
+                {"date": d, "count": counts[d]} for d in sorted(counts.keys())
+            ]
+            return {"data": data}
+
+        # Day list mode
+        if date:
+            day_local = datetime.strptime(date, "%Y-%m-%d").replace(
+                tzinfo=tz, hour=0, minute=0, second=0, microsecond=0
+            )
+            next_day_local = day_local + timedelta(days=1)
+            start_utc = day_local.astimezone(timezone.utc).replace(tzinfo=None)
+            end_utc = next_day_local.astimezone(timezone.utc).replace(tzinfo=None)
+            query = (
+                db.query(DBDispensingRecord, DBBranch)
+                .join(DBBranch, DBDispensingRecord.branch_id == DBBranch.id)
+                .filter(
+                    DBDispensingRecord.date >= start_utc,
+                    DBDispensingRecord.date < end_utc,
+                )
+            )
+            if branch_id:
+                query = query.filter(DBDispensingRecord.branch_id == branch_id)
+            records = query.order_by(DBDispensingRecord.date.asc()).all()
+            result = []
+            for rec, branch in records:
+                dt = rec.date
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                local_dt = dt.astimezone(tz)
+                result.append(
+                    {
+                        "id": rec.id,
+                        "time": local_dt.strftime("%H:%M:%S"),
+                        "patient_name": rec.patient_name,
+                        "employee_name": rec.employee_name,
+                        "branch_name": branch.name if branch else "",
+                    }
+                )
+            return {"data": result}
+
+        # Legacy behaviour for branch calendar
+        if not (branch_id and month):
+            raise HTTPException(status_code=400, detail="Missing parameters")
         start_local = datetime.strptime(month, "%Y-%m").replace(
             tzinfo=tz, day=1, hour=0, minute=0, second=0, microsecond=0
         )
