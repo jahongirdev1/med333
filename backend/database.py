@@ -3,6 +3,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
+import uuid
 import os
 from dotenv import load_dotenv
 
@@ -79,8 +80,8 @@ class Transfer(Base):
 
 class DispensingRecord(Base):
     __tablename__ = "dispensing_records"
-    
-    id = Column(String, primary_key=True)
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     patient_id = Column(String, ForeignKey("patients.id"), nullable=False)
     patient_name = Column(String, nullable=False)
     employee_id = Column(String, ForeignKey("employees.id"), nullable=False)
@@ -88,15 +89,23 @@ class DispensingRecord(Base):
     branch_id = Column(String, ForeignKey("branches.id"), nullable=False)
     date = Column(DateTime, default=datetime.utcnow)
 
+    items = relationship(
+        "DispensingItem", back_populates="record", cascade="all, delete-orphan"
+    )
+
 class DispensingItem(Base):
     __tablename__ = "dispensing_items"
-    
+
     id = Column(String, primary_key=True)
-    record_id = Column(String, ForeignKey("dispensing_records.id"), nullable=False)
+    record_id = Column(
+        String, ForeignKey("dispensing_records.id", ondelete="CASCADE"), nullable=False
+    )
     item_type = Column(String, nullable=False)  # 'medicine' or 'medical_device'
     item_id = Column(String, nullable=False)
     item_name = Column(String, nullable=False)
     quantity = Column(Integer, nullable=False)
+
+    record = relationship("DispensingRecord", back_populates="items")
 
 class Arrival(Base):
     __tablename__ = "arrivals"

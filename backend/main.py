@@ -1004,9 +1004,8 @@ async def create_dispensing_record(payload: dict, db: Session = Depends(get_db))
                     )
                 itm["item_name"] = name
 
-            record_id = str(uuid.uuid4())
             db_record = DBDispensingRecord(
-                id=record_id,
+                id=str(uuid.uuid4()),
                 branch_id=str(branch_id),
                 patient_id=str(patient_id),
                 patient_name=body.patient_name
@@ -1016,12 +1015,13 @@ async def create_dispensing_record(payload: dict, db: Session = Depends(get_db))
                 or f"{employee.first_name} {employee.last_name}",
             )
             db.add(db_record)
+            db.flush()
 
             for itm in items:
                 db.add(
                     DBDispensingItem(
                         id=str(uuid.uuid4()),
-                        record_id=record_id,
+                        record_id=db_record.id,
                         item_type=itm["type"].value,
                         item_id=str(itm["item_id"]),
                         item_name=itm["item_name"],
@@ -1036,20 +1036,20 @@ async def create_dispensing_record(payload: dict, db: Session = Depends(get_db))
                     itm["quantity"],
                 )
 
-        return {
-            "id": record_id,
-            "branch_id": str(branch_id),
-            "patient_id": str(patient_id),
-            "employee_id": str(employee_id),
-            "items": [
-                {
-                    "type": itm["type"].value,
-                    "item_id": str(itm["item_id"]),
-                    "quantity": itm["quantity"],
-                }
-                for itm in items
-            ],
-        }
+            return {
+                "id": db_record.id,
+                "branch_id": str(branch_id),
+                "patient_id": str(patient_id),
+                "employee_id": str(employee_id),
+                "items": [
+                    {
+                        "type": itm["type"].value,
+                        "item_id": str(itm["item_id"]),
+                        "quantity": itm["quantity"],
+                    }
+                    for itm in items
+                ],
+            }
     except HTTPException:
         raise
     except Exception as e:
