@@ -394,6 +394,45 @@ class ApiService {
     });
   }
 
+  // Monthly summary: which days have dispensings (optionally by branch)
+  async getCalendarDispensingSummary(params: {
+    start: string;  // 'YYYY-MM-01'
+    end: string;    // last day of month 'YYYY-MM-30/31'
+    branch_id?: string; // optional
+  }) {
+    const q = new URLSearchParams({ start: params.start, end: params.end });
+    if (params.branch_id) q.set('branch_id', params.branch_id);
+    q.set('aggregate', '1');
+    return this.request<{ data: Array<{ date: string; count: number }> }>(
+      `/calendar/dispensing?${q.toString()}`,
+    );
+  }
+
+  // Day list: all records for a specific date (optionally by branch)
+  async getDispensingByDate(params: { date: string; branch_id?: string }) {
+    const q = new URLSearchParams({ date: params.date });
+    if (params.branch_id) q.set('branch_id', params.branch_id);
+    return this.request<{ data: Array<{
+      id: string;
+      time: string; // 'HH:mm:ss'
+      patient_name: string;
+      employee_name: string;
+      branch_name: string;
+    }> }>(`/calendar/dispensing?${q.toString()}`);
+  }
+
+  // Record details for modal
+  async getDispensingRecord(recordId: string) {
+    return this.request<{ data: {
+      id: string;
+      time: string;
+      patient_name: string;
+      employee_name: string;
+      branch_name: string;
+      items: Array<{ type: 'medicine'|'medical_device'; name: string; quantity: number }>;
+    } }>(`/dispensing_records/${recordId}`);
+  }
+
   // Calendar
   async getDispensingCalendar(params: {
     branch_id: string;
