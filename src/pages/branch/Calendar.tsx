@@ -14,21 +14,11 @@ const Calendar: React.FC = () => {
   
   const [patients, setPatients] = useState<any[]>([]);
   const [selectedPatientId, setSelectedPatientId] = useState<string>('');
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [dispensingData, setDispensingData] = useState<any>({});
-  const eventsByDay = useMemo(() => {
-    if (!selectedPatientId) return {};
-    const filtered: Record<number, any[]> = {};
-    Object.keys(dispensingData).forEach((day) => {
-      const events = (dispensingData[day] || []).filter(
-        (event: any) => String(event.patient_id ?? event.patientId) === selectedPatientId,
-      );
-      if (events.length) {
-        filtered[Number(day)] = events;
-      }
-    });
-    return filtered;
-  }, [dispensingData, selectedPatientId]);
+  const [currentDate, setCurrentDate] = useState(
+    () => new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Almaty' }))
+  );
+  const [dispensingData, setDispensingData] = useState<Record<number, any[]>>({});
+  const [highlightedDays, setHighlightedDays] = useState<Set<number>>(new Set());
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [dayDetails, setDayDetails] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,9 +27,23 @@ const Calendar: React.FC = () => {
     fetchData();
   }, [branchId]);
 
+  const visibleMonth = useMemo(() => {
+    const almatyDate = new Date(
+      currentDate.toLocaleString('en-US', { timeZone: 'Asia/Almaty' })
+    );
+    const year = almatyDate.getFullYear();
+    const month = String(almatyDate.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}-01`;
+  }, [currentDate]);
+
+  const displayDate = useMemo(() => new Date(visibleMonth), [visibleMonth]);
+
   useEffect(() => {
     fetchCalendarData();
-  }, [currentDate, selectedPatientId]);
+    if (!selectedPatientId) {
+      setHighlightedDays(new Set());
+    }
+  }, [visibleMonth, selectedPatientId, branchId]);
 
   const fetchData = async () => {
     if (!branchId) return;
@@ -57,17 +61,56 @@ const Calendar: React.FC = () => {
   const fetchCalendarData = async () => {
     if (!branchId) return;
 
+    const monthParam = visibleMonth.slice(0, 7);
+    const patientParam = selectedPatientId ? `&patient_id=${selectedPatientId}` : '';
+
     try {
-      const response = await apiService.getDispensingCalendar(branchId);
-      setDispensingData(response?.data || {});
+      const response = await apiService.getDispensingCalendar(
+        `${branchId}&month=${monthParam}${patientParam}`
+      );
+
+      const eventsMap: Record<number, any[]> = {};
+      const daysSet = new Set<number>();
+
+      if (Array.isArray(response?.data)) {
+        const [year, month] = monthParam.split('-').map(Number);
+        response.data.forEach((item: any) => {
+          const dateStr = item.created_at || item.date || item.time;
+          if (!dateStr) return;
+          const parsed = new Date(dateStr);
+          const almatyDate = new Date(
+            parsed.toLocaleString('en-US', { timeZone: 'Asia/Almaty' })
+          );
+          if (
+            almatyDate.getFullYear() === year &&
+            almatyDate.getMonth() === month - 1
+          ) {
+            const dayNum = almatyDate.getDate();
+            daysSet.add(dayNum);
+            if (!eventsMap[dayNum]) eventsMap[dayNum] = [];
+            eventsMap[dayNum].push(item);
+          }
+        });
+      } else if (response?.data && typeof response.data === 'object') {
+        Object.keys(response.data).forEach((key) => {
+          const dayNum = Number(key);
+          if (!isNaN(dayNum)) {
+            daysSet.add(dayNum);
+            eventsMap[dayNum] = response.data[key];
+          }
+        });
+      }
+
+      setDispensingData(eventsMap);
+      setHighlightedDays(selectedPatientId ? daysSet : new Set());
     } catch (error) {
       console.error('Error fetching calendar data:', error);
     }
   };
 
   const getDaysInMonth = () => {
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
+    const year = displayDate.getFullYear();
+    const month = displayDate.getMonth();
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     const daysInMonth = lastDay.getDate();
@@ -89,13 +132,13 @@ const Calendar: React.FC = () => {
   };
 
   const hasDispensings = (day: number) => {
-    return eventsByDay[day] && eventsByDay[day].length > 0;
+    return dispensingData[day] && dispensingData[day].length > 0;
   };
 
   const handleDayClick = (day: number) => {
     if (hasDispensings(day)) {
       setSelectedDay(day);
-      setDayDetails(eventsByDay[day] || []);
+      setDayDetails(dispensingData[day] || []);
     }
   };
 
@@ -130,7 +173,7 @@ const Calendar: React.FC = () => {
         <div className="flex items-center space-x-2">
           <CalendarIcon className="h-5 w-5 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">
-            {monthNames[currentDate.getMonth()]} {currentDate.getFullYear()}
+            {monthNames[displayDate.getMonth()]} {displayDate.getFullYear()}
           </span>
         </div>
       </div>
@@ -167,7 +210,7 @@ const Calendar: React.FC = () => {
             <CardHeader>
               <div className="flex justify-between items-center">
                 <CardTitle>
-                  {monthNames[currentDate.getMonth()]} {currentDate.getFullYear()}
+                  {monthNames[displayDate.getMonth()]} {displayDate.getFullYear()}
                 </CardTitle>
                 <div className="flex space-x-1">
                   <Button variant="outline" size="sm" onClick={() => navigateMonth('prev')}>
@@ -187,16 +230,16 @@ const Calendar: React.FC = () => {
                   </div>
                 ))}
               </div>
-              
+
               <div className="grid grid-cols-7 gap-1">
                 {getDaysInMonth().map((day, index) => (
                   <div key={index} className="aspect-square">
                     {day && (
                       <Button
-                        variant={hasDispensings(day) ? "default" : "ghost"}
+                        variant="ghost"
                         className={`w-full h-full p-1 text-sm ${
-                          hasDispensings(day) 
-                            ? 'bg-green-500 hover:bg-green-600 text-white' 
+                          highlightedDays.has(day)
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200'
                             : ''
                         }`}
                         onClick={() => handleDayClick(day)}
@@ -212,7 +255,7 @@ const Calendar: React.FC = () => {
               <div className="mt-4 text-sm text-muted-foreground">
                 <div className="flex items-center space-x-4">
                   <div className="flex items-center space-x-2">
-                    <div className="w-4 h-4 bg-green-500 rounded"></div>
+                    <div className="w-4 h-4 bg-green-100 border border-green-400 dark:bg-green-900/40 rounded"></div>
                     <span>Есть выдачи</span>
                   </div>
                   <div className="flex items-center space-x-2">
@@ -230,7 +273,7 @@ const Calendar: React.FC = () => {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Выдачи {selectedDay} {monthNames[currentDate.getMonth()]} {currentDate.getFullYear()}
+              Выдачи {selectedDay} {monthNames[displayDate.getMonth()]} {displayDate.getFullYear()}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
