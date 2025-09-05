@@ -8,50 +8,48 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/hooks/use-toast';
 
+interface DayDetailItem {
+  time: string;
+  employee_name: string;
+  items: Array<{ type: 'medicine' | 'medical_device'; name: string; quantity: number }>;
+}
+
 const Calendar: React.FC = () => {
   const currentUser = storage.getCurrentUser();
   const branchId = currentUser?.branchId;
-  
+
   const [patients, setPatients] = useState<any[]>([]);
-  const [selectedPatientId, setSelectedPatientId] = useState<string>('');
-  const [currentDate, setCurrentDate] = useState(
-    () => new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Almaty' }))
-  );
-  const [dispensingData, setDispensingData] = useState<Record<number, any[]>>({});
+  const [selectedPatientId, setSelectedPatientId] = useState<string>('ALL');
+  const [visibleMonthISO, setVisibleMonthISO] = useState(() => {
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Almaty' }));
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    });
   const [highlightedDays, setHighlightedDays] = useState<Set<number>>(new Set());
-  const [selectedDay, setSelectedDay] = useState<number | null>(null);
-  const [dayDetails, setDayDetails] = useState<any[]>([]);
+  const [dayDetail, setDayDetail] = useState<{
+    open: boolean;
+    dateISO?: string;
+    loading: boolean;
+    items: DayDetailItem[];
+  }>({ open: false, loading: false, items: [] });
   const [loading, setLoading] = useState(true);
 
+  const displayDate = useMemo(() => new Date(`${visibleMonthISO}-01`), [visibleMonthISO]);
+
   useEffect(() => {
-    fetchData();
+    fetchPatients();
   }, [branchId]);
-
-  const visibleMonth = useMemo(() => {
-    const almatyDate = new Date(
-      currentDate.toLocaleString('en-US', { timeZone: 'Asia/Almaty' })
-    );
-    const year = almatyDate.getFullYear();
-    const month = String(almatyDate.getMonth() + 1).padStart(2, '0');
-    return `${year}-${month}-01`;
-  }, [currentDate]);
-
-  const displayDate = useMemo(() => new Date(visibleMonth), [visibleMonth]);
 
   useEffect(() => {
     fetchCalendarData();
-    if (!selectedPatientId) {
-      setHighlightedDays(new Set());
-    }
-  }, [visibleMonth, selectedPatientId, branchId]);
+    setDayDetail((prev) => ({ ...prev, open: false }));
+  }, [branchId, visibleMonthISO, selectedPatientId]);
 
-  const fetchData = async () => {
+  const fetchPatients = async () => {
     if (!branchId) return;
-    
     try {
-      const patientsRes = await apiService.getPatients(branchId);
-      setPatients(patientsRes?.data || []);
-    } catch (error) {
+      const res = await apiService.getPatients(branchId);
+      setPatients(res?.data || []);
+    } catch {
       toast({ title: 'Ошибка загрузки данных', variant: 'destructive' });
     } finally {
       setLoading(false);
@@ -60,51 +58,46 @@ const Calendar: React.FC = () => {
 
   const fetchCalendarData = async () => {
     if (!branchId) return;
-
-    const monthParam = visibleMonth.slice(0, 7);
-    const patientParam = selectedPatientId ? `&patient_id=${selectedPatientId}` : '';
-
     try {
-      const response = await apiService.getDispensingCalendar(
-        `${branchId}&month=${monthParam}${patientParam}`
-      );
-
-      const eventsMap: Record<number, any[]> = {};
+      const params: any = { branch_id: branchId, month: visibleMonthISO };
+      if (selectedPatientId !== 'ALL') params.patient_id = selectedPatientId;
+      const response = await apiService.getDispensingCalendar(params);
       const daysSet = new Set<number>();
 
       if (Array.isArray(response?.data)) {
-        const [year, month] = monthParam.split('-').map(Number);
+        const [year, month] = visibleMonthISO.split('-').map(Number);
         response.data.forEach((item: any) => {
           const dateStr = item.created_at || item.date || item.time;
           if (!dateStr) return;
           const parsed = new Date(dateStr);
-          const almatyDate = new Date(
-            parsed.toLocaleString('en-US', { timeZone: 'Asia/Almaty' })
-          );
-          if (
-            almatyDate.getFullYear() === year &&
-            almatyDate.getMonth() === month - 1
-          ) {
-            const dayNum = almatyDate.getDate();
-            daysSet.add(dayNum);
-            if (!eventsMap[dayNum]) eventsMap[dayNum] = [];
-            eventsMap[dayNum].push(item);
+          const local = new Date(parsed.toLocaleString('en-US', { timeZone: 'Asia/Almaty' }));
+          if (local.getFullYear() === year && local.getMonth() === month - 1) {
+            daysSet.add(local.getDate());
           }
         });
       } else if (response?.data && typeof response.data === 'object') {
         Object.keys(response.data).forEach((key) => {
           const dayNum = Number(key);
-          if (!isNaN(dayNum)) {
-            daysSet.add(dayNum);
-            eventsMap[dayNum] = response.data[key];
-          }
+          if (!isNaN(dayNum)) daysSet.add(dayNum);
         });
       }
 
-      setDispensingData(eventsMap);
-      setHighlightedDays(selectedPatientId ? daysSet : new Set());
+      setHighlightedDays(daysSet);
     } catch (error) {
       console.error('Error fetching calendar data:', error);
+      toast({ title: 'Ошибка загрузки календаря', variant: 'destructive' });
+    }
+  };
+
+  const fetchDayDetails = async (dateISO: string) => {
+    if (!branchId || selectedPatientId === 'ALL') return;
+    setDayDetail({ open: true, dateISO, loading: true, items: [] });
+    try {
+      const res = await apiService.getDispensingDayDetails(branchId, selectedPatientId, dateISO);
+      setDayDetail({ open: true, dateISO, loading: false, items: res?.data || [] });
+    } catch {
+      toast({ title: 'Ошибка загрузки данных', variant: 'destructive' });
+      setDayDetail({ open: true, dateISO, loading: false, items: [] });
     }
   };
 
@@ -116,40 +109,32 @@ const Calendar: React.FC = () => {
     const daysInMonth = lastDay.getDate();
     const startingDayOfWeek = firstDay.getDay();
 
-    const days = [];
-    
-    // Пустые дни в начале месяца
+    const days = [] as Array<number | null>;
     for (let i = 0; i < startingDayOfWeek; i++) {
       days.push(null);
     }
-    
-    // Дни месяца
     for (let day = 1; day <= daysInMonth; day++) {
       days.push(day);
     }
-    
     return days;
   };
 
-  const hasDispensings = (day: number) => {
-    return dispensingData[day] && dispensingData[day].length > 0;
-  };
-
   const handleDayClick = (day: number) => {
-    if (hasDispensings(day)) {
-      setSelectedDay(day);
-      setDayDetails(dispensingData[day] || []);
-    }
+    if (selectedPatientId === 'ALL') return;
+    if (!highlightedDays.has(day)) return;
+    const dateISO = `${visibleMonthISO}-${String(day).padStart(2, '0')}`;
+    fetchDayDetails(dateISO);
   };
 
   const navigateMonth = (direction: 'prev' | 'next') => {
-    const newDate = new Date(currentDate);
+    const [year, month] = visibleMonthISO.split('-').map(Number);
+    const date = new Date(year, month - 1, 1);
     if (direction === 'prev') {
-      newDate.setMonth(newDate.getMonth() - 1);
+      date.setMonth(date.getMonth() - 1);
     } else {
-      newDate.setMonth(newDate.getMonth() + 1);
+      date.setMonth(date.getMonth() + 1);
     }
-    setCurrentDate(newDate);
+    setVisibleMonthISO(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`);
   };
 
   const monthNames = [
@@ -188,17 +173,17 @@ const Calendar: React.FC = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <Select value={selectedPatientId || undefined} onValueChange={(v) => setSelectedPatientId(v === 'all' ? '' : v)}>
+              <Select value={selectedPatientId} onValueChange={(v) => setSelectedPatientId(v)}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Все пациенты" />
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {patients.filter((patient) => patient?.id).map((patient) => (
-                    <SelectItem key={String(patient.id)} value={String(patient.id)}>
-                      {patient.first_name || patient.firstName} {patient.last_name || patient.lastName}
+                  <SelectItem value="ALL">Все пациенты</SelectItem>
+                  {patients.filter((p) => p?.id).map((p) => (
+                    <SelectItem key={String(p.id)} value={String(p.id)}>
+                      {p.first_name || p.firstName} {p.last_name || p.lastName}
                     </SelectItem>
                   ))}
-                  <SelectItem value="all">Все пациенты</SelectItem>
                 </SelectContent>
               </Select>
             </CardContent>
@@ -224,7 +209,7 @@ const Calendar: React.FC = () => {
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-7 gap-1 mb-2">
-                {weekDays.map(day => (
+                {weekDays.map((day) => (
                   <div key={day} className="p-2 text-center text-sm font-medium text-muted-foreground">
                     {day}
                   </div>
@@ -243,7 +228,7 @@ const Calendar: React.FC = () => {
                             : ''
                         }`}
                         onClick={() => handleDayClick(day)}
-                        disabled={!hasDispensings(day)}
+                        disabled={selectedPatientId === 'ALL' || !highlightedDays.has(day)}
                       >
                         {day}
                       </Button>
@@ -269,32 +254,36 @@ const Calendar: React.FC = () => {
         </div>
       </div>
 
-      <Dialog open={!!selectedDay} onOpenChange={() => setSelectedDay(null)}>
+      <Dialog open={dayDetail.open} onOpenChange={(o) => setDayDetail((prev) => ({ ...prev, open: o }))}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Выдачи {selectedDay} {monthNames[displayDate.getMonth()]} {displayDate.getFullYear()}
+              {dayDetail.dateISO && (() => {
+                const d = new Date(`${dayDetail.dateISO}T00:00:00`);
+                return `Выдачи ${d.getDate()} ${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+              })()}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {dayDetails.map((detail, index) => (
-              <div key={index} className="border rounded p-3">
-                <div className="font-medium">
-                  {detail.patientName}
+            {dayDetail.loading && <div>Загрузка...</div>}
+            {!dayDetail.loading && dayDetail.items.length === 0 && (
+              <div className="text-sm text-muted-foreground">Нет выдач за выбранный день</div>
+            )}
+            {!dayDetail.loading &&
+              dayDetail.items.map((detail, index) => (
+                <div key={index} className="border rounded p-3">
+                  <div className="text-sm text-muted-foreground mb-2">
+                    Время: {detail.time} | Сотрудник: {detail.employee_name}
+                  </div>
+                  <ul className="list-disc list-inside space-y-1">
+                    {detail.items.map((item, i) => (
+                      <li key={i} className="text-sm text-muted-foreground">
+                        {item.type === 'medicine' ? 'Medicine' : 'Device'}: {item.name} — {item.quantity}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                <div className="text-sm text-muted-foreground mb-2">
-                  Время: {detail.time} | Сотрудник: {detail.employeeName}
-                </div>
-                <div className="space-y-1">
-                  <div className="text-sm font-medium">Выдано:</div>
-                  {detail.items.map((item: any, i: number) => (
-                    <div key={i} className="text-sm text-muted-foreground ml-2">
-                      • {item.name}: {item.quantity} {item.unit || 'шт'}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
+              ))}
           </div>
         </DialogContent>
       </Dialog>
@@ -303,3 +292,4 @@ const Calendar: React.FC = () => {
 };
 
 export default Calendar;
+
