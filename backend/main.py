@@ -10,7 +10,8 @@ from datetime import datetime
 import uuid
 import json
 from pydantic import ValidationError
-from services.stock import get_available_qty, decrement_stock
+from services.stock import get_available_qty, decrement_stock, ItemType
+import traceback
 
 def ensure_schema_patches():
     with engine.begin() as conn:
@@ -937,82 +938,123 @@ async def get_dispensing_records(branch_id: Optional[str] = None, db: Session = 
 
 @app.post("/dispensing", status_code=status.HTTP_201_CREATED)
 async def create_dispensing_record(payload: dict, db: Session = Depends(get_db)):
+    print("DISPENSING_RAW", payload)
     try:
         body = DispensePayload.model_validate(payload)
     except ValidationError as e:
-        # Frontend expects 400 for bad payloads
         raise HTTPException(status_code=400, detail=e.errors())
 
-    items: list[DispenseLine] = body._normalized_items
+    # Normalize items to unified shape and convert types
+    raw_items: list[DispenseLine] = body._normalized_items
+    items = [
+        {
+            "type": ItemType(line.item_type),
+            "item_id": line.item_id,
+            "quantity": int(line.quantity),
+        }
+        for line in raw_items
+        if line.quantity > 0
+    ]
+    print("DISPENSING_ITEMS", items)
     if not items:
         raise HTTPException(status_code=400, detail="No items to dispense")
 
+    def parse_uuid_or_str(val, use_uuid: bool):
+        if use_uuid:
+            try:
+                return uuid.UUID(str(val))
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Invalid UUID: {val}")
+        return str(val)
+
     try:
+        ids_are_uuid = (
+            getattr(DBDispensingRecord.__table__.c.id.type.python_type, "__name__", "")
+            == "UUID"
+        )
+        branch_id = parse_uuid_or_str(body.branch_id, ids_are_uuid)
+        patient_id = parse_uuid_or_str(body.patient_id, ids_are_uuid)
+        employee_id = parse_uuid_or_str(body.employee_id, ids_are_uuid)
+        for itm in items:
+            itm["item_id"] = parse_uuid_or_str(itm["item_id"], ids_are_uuid)
+
+        print(
+            "DISPENSING_IDS",
+            branch_id,
+            patient_id,
+            employee_id,
+        )
+
         with db.begin():
-            patient = db.query(DBPatient).filter(DBPatient.id == str(body.patient_id)).first()
-            employee = db.query(DBEmployee).filter(DBEmployee.id == str(body.employee_id)).first()
+            patient = db.query(DBPatient).filter(DBPatient.id == str(patient_id)).first()
+            employee = db.query(DBEmployee).filter(DBEmployee.id == str(employee_id)).first()
             if not patient or not employee:
                 raise HTTPException(status_code=404, detail="Patient or employee not found")
 
-            stock_names: dict[tuple[str, str], str | None] = {}
-            for line in items:
+            for itm in items:
                 available, name = get_available_qty(
-                    db, str(body.branch_id), line.item_type, str(line.item_id)
+                    db, str(branch_id), itm["type"], str(itm["item_id"])
                 )
-                if line.quantity > available:
+                if itm["quantity"] > available:
                     raise HTTPException(
                         status_code=400,
-                        detail=
-                        f"Not enough stock for {line.item_type}:{line.item_id} (available {available}, requested {line.quantity})",
+                        detail=(
+                            f"Not enough stock for {itm['type'].value}:{itm['item_id']} (available {available}, requested {itm['quantity']})"
+                        ),
                     )
-                stock_names[(line.item_type, str(line.item_id))] = name
+                itm["item_name"] = name
 
             record_id = str(uuid.uuid4())
             db_record = DBDispensingRecord(
                 id=record_id,
-                branch_id=str(body.branch_id),
-                patient_id=str(body.patient_id),
-                patient_name=body.patient_name or f"{patient.first_name} {patient.last_name}",
-                employee_id=str(body.employee_id),
-                employee_name=body.employee_name or f"{employee.first_name} {employee.last_name}",
+                branch_id=str(branch_id),
+                patient_id=str(patient_id),
+                patient_name=body.patient_name
+                or f"{patient.first_name} {patient.last_name}",
+                employee_id=str(employee_id),
+                employee_name=body.employee_name
+                or f"{employee.first_name} {employee.last_name}",
             )
             db.add(db_record)
 
-            for line in items:
+            for itm in items:
                 db.add(
                     DBDispensingItem(
                         id=str(uuid.uuid4()),
                         record_id=record_id,
-                        item_type=line.item_type,
-                        item_id=str(line.item_id),
-                        item_name=stock_names[(line.item_type, str(line.item_id))],
-                        quantity=line.quantity,
+                        item_type=itm["type"].value,
+                        item_id=str(itm["item_id"]),
+                        item_name=itm["item_name"],
+                        quantity=itm["quantity"],
                     )
                 )
-                if line.quantity > 0:
-                    decrement_stock(
-                        db, str(body.branch_id), line.item_type, str(line.item_id), line.quantity
-                    )
+                decrement_stock(
+                    db,
+                    str(branch_id),
+                    itm["type"],
+                    str(itm["item_id"]),
+                    itm["quantity"],
+                )
 
         return {
             "id": record_id,
-            "branch_id": str(body.branch_id),
-            "patient_id": str(body.patient_id),
-            "employee_id": str(body.employee_id),
+            "branch_id": str(branch_id),
+            "patient_id": str(patient_id),
+            "employee_id": str(employee_id),
             "items": [
                 {
-                    "type": l.item_type,
-                    "item_id": str(l.item_id),
-                    "quantity": l.quantity,
+                    "type": itm["type"].value,
+                    "item_id": str(itm["item_id"]),
+                    "quantity": itm["quantity"],
                 }
-                for l in items
+                for itm in items
             ],
         }
     except HTTPException:
         raise
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception:
+    except Exception as e:
+        print("DISPENSING_ERROR:", repr(e))
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Failed to create dispensing")
 
 # Arrival endpoints
