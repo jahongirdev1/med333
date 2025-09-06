@@ -45,6 +45,25 @@ class ApiService {
     }
   }
 
+  private normalizeData<T = any>(res: any): T {
+    // Some endpoints return { data: [...] }, others { data: { data: [...] } }
+    if (!res) return [] as any;
+    if (Array.isArray(res)) return res as any;
+    if (res?.data?.data) return res.data.data as T;
+    if (res?.data) return res.data as T;
+    return res as T;
+  }
+
+  private async requestWithFallback<T = any>(paths: string[]): Promise<{ data?: T; error?: string }> {
+    let lastErr: string | undefined;
+    for (const p of paths) {
+      const res = await this.request<T>(p);
+      if (!res?.error) return res;
+      lastErr = res.error;
+    }
+    return { error: lastErr ?? 'Unknown error' };
+  }
+
   // Auth
   async login(credentials: LoginData) {
     return this.request<any>('/auth/login', {
@@ -394,43 +413,48 @@ class ApiService {
     });
   }
 
+  // ---------- Calendar endpoints (admin + branch compatible) ----------
+
   // Monthly summary: which days have dispensings (optionally by branch)
   async getCalendarDispensingSummary(params: {
-    start: string;  // 'YYYY-MM-01'
-    end: string;    // last day of month 'YYYY-MM-30/31'
-    branch_id?: string; // optional
+    start: string;    // 'YYYY-MM-01'
+    end: string;      // 'YYYY-MM-30/31' (inclusive or exclusive is handled by backend)
+    branch_id?: string;
   }) {
     const q = new URLSearchParams({ start: params.start, end: params.end });
     if (params.branch_id) q.set('branch_id', params.branch_id);
     q.set('aggregate', '1');
-    return this.request<{ data: Array<{ date: string; count: number }> }>(
-      `/calendar/dispensing?${q.toString()}`,
+
+    const res = await this.requestWithFallback<{ date: string; count: number }[]>(
+      [`/calendar/dispensing?${q.toString()}`, `/admin/calendar/dispensing?${q.toString()}`]
     );
+    if (res.error) return res;
+
+    return { data: this.normalizeData(res) };
   }
 
-  // Day list: all records for a specific date (optionally by branch)
+  // All records for a specific date (optionally by branch)
   async getDispensingByDate(params: { date: string; branch_id?: string }) {
     const q = new URLSearchParams({ date: params.date });
     if (params.branch_id) q.set('branch_id', params.branch_id);
-    return this.request<{ data: Array<{
+
+    const res = await this.requestWithFallback<Array<{
       id: string;
       time: string; // 'HH:mm:ss'
       patient_name: string;
       employee_name: string;
       branch_name: string;
-    }> }>(`/calendar/dispensing?${q.toString()}`);
+    }>>([`/calendar/dispensing?${q.toString()}`, `/admin/calendar/dispensing?${q.toString()}`]);
+
+    if (res.error) return res;
+    return { data: this.normalizeData(res) };
   }
 
   // Record details for modal
   async getDispensingRecord(recordId: string) {
-    return this.request<{ data: {
-      id: string;
-      time: string;
-      patient_name: string;
-      employee_name: string;
-      branch_name: string;
-      items: Array<{ type: 'medicine'|'medical_device'; name: string; quantity: number }>;
-    } }>(`/dispensing_records/${recordId}`);
+    const res = await this.request<any>(`/dispensing_records/${recordId}`);
+    if (res.error) return res;
+    return { data: this.normalizeData(res) };
   }
 
   // Calendar

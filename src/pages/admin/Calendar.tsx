@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { startOfMonth, endOfMonth, addMonths, format } from 'date-fns';
+import React from 'react';
+import { addMonths, startOfMonth, endOfMonth, format } from 'date-fns';
+import { ru } from 'date-fns/locale';
 import { apiService } from '@/utils/api';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -12,20 +13,78 @@ import { toast } from '@/hooks/use-toast';
 const weekDays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
 const AdminCalendar: React.FC = () => {
-  const [branches, setBranches] = useState<any[]>([]);
-  const [branchId, setBranchId] = useState<string | undefined>(undefined); // undefined = All branches
-  const [currentMonth, setCurrentMonth] = useState<Date>(startOfMonth(new Date()));
-  const [highlightedDates, setHighlightedDates] = useState<Set<string>>(new Set());
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [dayRecords, setDayRecords] = useState<any[]>([]);
-  const [detailsId, setDetailsId] = useState<string | null>(null);
-  const [detailsData, setDetailsData] = useState<any | null>(null);
-  const [loadingMonth, setLoadingMonth] = useState(false);
-  const [loadingDay, setLoadingDay] = useState(false);
-  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [branches, setBranches] = React.useState<any[]>([]);
+  const [branchId, setBranchId] = React.useState<string | undefined>(undefined); // undefined = All branches
+  const [currentMonth, setCurrentMonth] = React.useState<Date>(startOfMonth(new Date()));
+  const [highlighted, setHighlighted] = React.useState<Set<string>>(new Set());
+  const [selectedDate, setSelectedDate] = React.useState<string | null>(null);
+  const [dayRecords, setDayRecords] = React.useState<any[]>([]);
+  const [detailsId, setDetailsId] = React.useState<string | null>(null);
+  const [detailsData, setDetailsData] = React.useState<any | null>(null);
+  const [loadingMonth, setLoadingMonth] = React.useState(false);
+  const [loadingDay, setLoadingDay] = React.useState(false);
+  const [loadingDetails, setLoadingDetails] = React.useState(false);
+
+  // helper: yyyy-MM-dd
+  const ymd = (d: Date) => format(d, 'yyyy-MM-dd');
+
+  const loadMonth = React.useCallback(async () => {
+    setLoadingMonth(true);
+    setHighlighted(new Set());
+
+    const start = format(startOfMonth(currentMonth), 'yyyy-MM-dd');
+    const end = format(endOfMonth(currentMonth), 'yyyy-MM-dd');
+
+    try {
+      const res = await apiService.getCalendarDispensingSummary({
+        start,
+        end,
+        branch_id: branchId || undefined,
+      });
+
+      if (res.error) {
+        console.error('Calendar summary error:', res.error, { start, end, branchId });
+        toast({ title: 'Ошибка загрузки календаря', variant: 'destructive' });
+        return;
+      }
+
+      const rows = (res.data ?? []) as Array<{ date: string; count: number }>;
+      setHighlighted(new Set(rows.map(r => r.date)));
+    } catch (e) {
+      console.error('Calendar summary exception:', e);
+      toast({ title: 'Ошибка загрузки календаря', variant: 'destructive' });
+    } finally {
+      setLoadingMonth(false);
+    }
+  }, [currentMonth, branchId]);
+
+  const loadDay = React.useCallback(async (iso: string) => {
+    setLoadingDay(true);
+    setDayRecords([]);
+    try {
+      const res = await apiService.getDispensingByDate({ date: iso, branch_id: branchId || undefined });
+      if (res.error) {
+        console.error('Day list error:', res.error, { iso, branchId });
+        toast({ title: 'Ошибка загрузки выдач', variant: 'destructive' });
+        return;
+      }
+      setDayRecords(res.data ?? []);
+    } catch (e) {
+      console.error('Day list exception:', e);
+      toast({ title: 'Ошибка загрузки выдач', variant: 'destructive' });
+    } finally {
+      setLoadingDay(false);
+    }
+  }, [branchId]);
+
+  React.useEffect(() => {
+    setSelectedDate(null);
+    setDayRecords([]);
+    loadMonth();
+  }, [loadMonth]);
 
   // Load branches on mount
-  useEffect(() => {
+  React.useEffect(() => {
     (async () => {
       try {
         const res = await apiService.getBranches();
@@ -36,32 +95,8 @@ const AdminCalendar: React.FC = () => {
     })();
   }, []);
 
-  // Fetch month summary when month or branch changes
-  useEffect(() => {
-    const fetchSummary = async () => {
-      setLoadingMonth(true);
-      try {
-        const start = format(currentMonth, 'yyyy-MM-01');
-        const end = format(endOfMonth(currentMonth), 'yyyy-MM-dd');
-        const res = await apiService.getCalendarDispensingSummary({ start, end, branch_id: branchId });
-        const setData = new Set<string>();
-        res.data?.forEach((d: any) => setData.add(d.date));
-        setHighlightedDates(setData);
-      } catch {
-        toast({ title: 'Ошибка загрузки календаря', variant: 'destructive' });
-        setHighlightedDates(new Set());
-      } finally {
-        setLoadingMonth(false);
-        setSelectedDate(null);
-        setDayRecords([]);
-        setDetailsId(null);
-      }
-    };
-    fetchSummary();
-  }, [currentMonth, branchId]);
-
   // Fetch details when detailsId changes
-  useEffect(() => {
+  React.useEffect(() => {
     if (!detailsId) return;
     const fetchDetails = async () => {
       setLoadingDetails(true);
@@ -92,27 +127,23 @@ const AdminCalendar: React.FC = () => {
     return days;
   };
 
-  const handleDayClick = (day: number) => {
-    const iso = format(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day), 'yyyy-MM-dd');
+  const onClickDay = (day: number) => {
+    const d = new Date(currentMonth);
+    d.setDate(day);
+    const iso = ymd(d);
     setSelectedDate(iso);
-    fetchDayRecords(iso);
+    loadDay(iso);
   };
 
-  const fetchDayRecords = async (iso: string) => {
-    setLoadingDay(true);
-    try {
-      const res = await apiService.getDispensingByDate({ date: iso, branch_id: branchId });
-      setDayRecords(res.data || []);
-    } catch {
-      toast({ title: 'Ошибка загрузки данных', variant: 'destructive' });
-      setDayRecords([]);
-    } finally {
-      setLoadingDay(false);
-    }
+  const isHighlighted = (day: number) => {
+    const d = new Date(currentMonth);
+    d.setDate(day);
+    const iso = ymd(d);
+    return highlighted.has(iso);
   };
 
   const days = getDaysInMonth();
-  const monthLabel = format(currentMonth, 'LLLL yyyy', { locale: undefined });
+  const monthLabel = format(currentMonth, 'LLLL yyyy', { locale: ru });
 
   return (
     <div className="space-y-6">
@@ -169,7 +200,7 @@ const AdminCalendar: React.FC = () => {
           days.map((day, idx) => {
             if (!day) return <div key={idx} />;
             const iso = format(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day), 'yyyy-MM-dd');
-            const isHighlighted = highlightedDates.has(iso);
+            const isHighlightedDay = isHighlighted(day);
             const isSelected = selectedDate === iso;
             return (
               <Button
@@ -177,9 +208,9 @@ const AdminCalendar: React.FC = () => {
                 variant={isSelected ? 'default' : 'ghost'}
                 className={cn(
                   'h-10 w-10 p-0',
-                  isHighlighted && 'bg-green-100 text-green-800 ring-2 ring-green-500 rounded-full'
+                  isHighlightedDay && 'bg-green-100 text-green-800 ring-2 ring-green-500 rounded-full'
                 )}
-                onClick={() => handleDayClick(day)}
+                onClick={() => onClickDay(day)}
               >
                 {day}
               </Button>
@@ -238,7 +269,7 @@ const AdminCalendar: React.FC = () => {
             <div className="space-y-4">
               <div>
                 <h4 className="font-semibold mb-2">Лекарства</h4>
-                {detailsData.items.filter((i: any) => i.type === 'medicine').length > 0 ? (
+                {detailsData.items?.filter((i: any) => i.type === 'medicine').length > 0 ? (
                   <ul className="list-disc pl-5 space-y-1">
                     {detailsData.items
                       .filter((i: any) => i.type === 'medicine')
@@ -252,7 +283,7 @@ const AdminCalendar: React.FC = () => {
               </div>
               <div>
                 <h4 className="font-semibold mb-2">ИМН</h4>
-                {detailsData.items.filter((i: any) => i.type === 'medical_device').length > 0 ? (
+                {detailsData.items?.filter((i: any) => i.type === 'medical_device').length > 0 ? (
                   <ul className="list-disc pl-5 space-y-1">
                     {detailsData.items
                       .filter((i: any) => i.type === 'medical_device')
