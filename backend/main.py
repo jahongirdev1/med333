@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Query, Response
+from fastapi import FastAPI, Depends, HTTPException, status, Query, Response, Request
 from starlette.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
@@ -56,7 +56,7 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
-ALMATY = ZoneInfo("Asia/Almaty")
+ALMATY_TZ = ZoneInfo("Asia/Almaty")
 
 
 def to_almaty(dt: datetime | str | None) -> str:
@@ -69,7 +69,7 @@ def to_almaty(dt: datetime | str | None) -> str:
             return dt
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-    return dt.astimezone(ALMATY).strftime("%d.%m.%Y %H:%M")
+    return dt.astimezone(ALMATY_TZ).strftime("%d.%m.%Y %H:%M")
 
 
 def humanize_items(raw) -> str:
@@ -1529,15 +1529,21 @@ async def export_incoming_report(
 
 
 @app.get("/reports/dispensings")
-def get_dispensings_report(
+async def get_dispensings_report(
+    request: Request,
     date_from: str,
     date_to: str,
-    branch_id: str | None = None,
-    format: str | None = None,
+    branch_id: str | None = Query(None),
+    export: str | None = Query(None),
+    format: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    start = datetime.fromisoformat(date_from).replace(hour=0, minute=0, second=0, microsecond=0)
-    end = datetime.fromisoformat(date_to).replace(hour=23, minute=59, second=59, microsecond=999999)
+    start = datetime.fromisoformat(date_from).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    end = datetime.fromisoformat(date_to).replace(
+        hour=23, minute=59, second=59, microsecond=999999
+    )
 
     q = db.query(DBDispensingRecord).options(joinedload(DBDispensingRecord.items))
     q = q.filter(DBDispensingRecord.date >= start, DBDispensingRecord.date <= end)
@@ -1549,8 +1555,14 @@ def get_dispensings_report(
     employee_ids = {r.employee_id for r in records}
     name_map = {(i.item_type, i.item_id): i.item_name for r in records for i in r.items}
 
-    patient_map = {p.id: f"{p.first_name} {p.last_name}".strip() for p in db.query(DBPatient).filter(DBPatient.id.in_(patient_ids)).all()} if patient_ids else {}
-    employee_map = {e.id: f"{e.first_name} {e.last_name}".strip() for e in db.query(DBEmployee).filter(DBEmployee.id.in_(employee_ids)).all()} if employee_ids else {}
+    patient_map = {
+        p.id: f"{p.first_name} {p.last_name}".strip()
+        for p in db.query(DBPatient).filter(DBPatient.id.in_(patient_ids)).all()
+    } if patient_ids else {}
+    employee_map = {
+        e.id: f"{e.first_name} {e.last_name}".strip()
+        for e in db.query(DBEmployee).filter(DBEmployee.id.in_(employee_ids)).all()
+    } if employee_ids else {}
 
     med_ids = [iid for (t, iid) in name_map if t == "medicine"]
     if med_ids:
@@ -1558,45 +1570,73 @@ def get_dispensings_report(
             name_map[("medicine", m.id)] = m.name
     dev_ids = [iid for (t, iid) in name_map if t == "medical_device"]
     if dev_ids:
-        for d in db.query(DBMedicalDevice.id, DBMedicalDevice.name).filter(DBMedicalDevice.id.in_(dev_ids)):
+        for d in db.query(DBMedicalDevice.id, DBMedicalDevice.name).filter(
+            DBMedicalDevice.id.in_(dev_ids)
+        ):
             name_map[("medical_device", d.id)] = d.name
 
     json_rows = []
-    rows = []
     for r in records:
         patient_full = patient_map.get(r.patient_id, r.patient_name or "")
         employee_full = employee_map.get(r.employee_id, r.employee_name or "")
         dt_iso = r.date.isoformat() if r.date else ""
-        dt_local = fmt_almaty(r.date) if r.date else ""
 
         json_items = []
         for i in r.items:
             nm = name_map.get((i.item_type, i.item_id), i.item_name)
-            json_items.append({"type": i.item_type, "name": nm, "quantity": i.quantity})
-        items_human = "; ".join(sorted(f"{it['name']} — {it['quantity']}" for it in json_items))
+            json_items.append(
+                {"type": i.item_type, "name": nm, "quantity": i.quantity}
+            )
 
-        json_rows.append({
-            "id": r.id,
-            "patient_name": patient_full,
-            "employee_name": employee_full,
-            "datetime": dt_iso,
-            "items": json_items,
-        })
-        rows.append([patient_full, employee_full, dt_local, items_human])
+        json_rows.append(
+            {
+                "id": r.id,
+                "patient_name": patient_full,
+                "employee_name": employee_full,
+                "datetime": dt_iso,
+                "items": json_items,
+            }
+        )
 
-    if format == "xlsx":
-        content = render_xlsx(
-            headers=["Пациент", "Сотрудник", "Дата и время", "Выдано (наименование — кол-во)"],
+    result = {"data": json_rows}
+
+    if _wants_excel(request, export, format):
+        rows = []
+        for r in result.get("data", []):
+            items_list = r.get("items", []) or []
+            items_human = "; ".join(
+                f"{i.get('name','')} — {i.get('quantity','')}" for i in items_list
+            )
+            rows.append(
+                [
+                    r.get("patient_name", ""),
+                    r.get("employee_name", ""),
+                    _to_almaty_str(r.get("datetime", "")),
+                    items_human,
+                ]
+            )
+
+        content = _render_xlsx(
+            headers=[
+                "Пациент",
+                "Сотрудник",
+                "Дата и время",
+                "Выдано (наименование — кол-во)",
+            ],
             rows=rows,
             sheet_name="Выдачи",
         )
+
+        safe_to = date_to or datetime.now(ALMATY_TZ).strftime("%Y-%m-%d")
         return Response(
             content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers=ascii_download_headers(f"dispensings_report_{date_to}.xlsx"),
+            headers=_ascii_download_headers(
+                f"dispensings_report_{safe_to}.xlsx"
+            ),
         )
 
-    return {"data": json_rows}
+    return result
 
 
 @app.get("/reports/arrivals")
@@ -1675,29 +1715,56 @@ def pick_col(model, *names, fallback=None):
     return fallback
 
 
-ALMATY_TZ = ZoneInfo("Asia/Almaty")
+def _to_almaty_str(dt_value) -> str:
+    """
+    Accepts: datetime or ISO str. Returns 'YYYY-MM-DD HH:MM:SS' in Asia/Almaty.
+    """
+    if isinstance(dt_value, str):
+        s = dt_value.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(s)
+        except Exception:
+            return dt_value
+    else:
+        dt = dt_value
 
-
-def fmt_almaty(dt: datetime) -> str:
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(ALMATY_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def ascii_download_headers(filename_ascii: str) -> dict[str, str]:
-    return {"Content-Disposition": f"attachment; filename={filename_ascii}"}
-
-
-def render_xlsx(headers: list[str], rows: list[list[str]], sheet_name: str = "Sheet1") -> bytes:
+def _render_xlsx(headers: list[str], rows: list[list[str]], sheet_name: str = "Sheet1") -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = sheet_name
     ws.append(headers)
-    for row in rows:
-        ws.append(row)
+    for r in rows:
+        ws.append(r)
     bio = BytesIO()
     wb.save(bio)
     return bio.getvalue()
+
+
+def _ascii_download_headers(filename_ascii: str) -> dict[str, str]:
+    return {"Content-Disposition": f"attachment; filename={filename_ascii}"}
+
+
+def _wants_excel(request: Request, export: str | None, format_: str | None) -> bool:
+    q = (export or "").lower() or (format_ or "").lower()
+    return q in {"excel", "xlsx"}
+
+
+# Backward compatibility for older callers
+def fmt_almaty(dt: datetime) -> str:
+    return _to_almaty_str(dt)
+
+
+def render_xlsx(headers: list[str], rows: list[list[str]], sheet_name: str = "Sheet1") -> bytes:
+    return _render_xlsx(headers, rows, sheet_name)
+
+
+def ascii_download_headers(filename_ascii: str) -> dict[str, str]:
+    return _ascii_download_headers(filename_ascii)
 
 
 def pick_arrival_branch_col(Arrival):
