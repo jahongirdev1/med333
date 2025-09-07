@@ -1265,6 +1265,203 @@ async def generate_report(request: ReportRequest, db: Session = Depends(get_db))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+@app.get("/reports/stock")
+async def get_stock_report(
+    branch_id: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        tz = ZoneInfo("Asia/Almaty")
+        if date_to:
+            dt_to = datetime.fromisoformat(date_to)
+            if dt_to.tzinfo is None:
+                dt_to = dt_to.replace(tzinfo=tz)
+            else:
+                dt_to = dt_to.astimezone(tz)
+            dt_to = dt_to.replace(hour=23, minute=59, second=59, microsecond=999999)
+        else:
+            now = datetime.now(tz)
+            dt_to = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        if date_from:
+            dt_from = datetime.fromisoformat(date_from)
+            if dt_from.tzinfo is None:
+                dt_from = dt_from.replace(tzinfo=tz)
+            else:
+                dt_from = dt_from.astimezone(tz)
+            dt_from = dt_from.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_utc = dt_from.astimezone(timezone.utc).replace(tzinfo=None)
+        else:
+            start_utc = None
+        end_utc = dt_to.astimezone(timezone.utc).replace(tzinfo=None)
+
+        params = {"b": branch_id, "end": end_utc}
+        if start_utc:
+            params["start"] = start_utc
+
+        items = db.execute(
+            text(
+                "SELECT id, name, category_id, 'medicine' AS type FROM medicines WHERE branch_id = :b "
+                "UNION ALL "
+                "SELECT id, name, category_id, 'medical_device' AS type FROM medical_devices WHERE branch_id = :b"
+            ),
+            {"b": branch_id},
+        ).fetchall()
+
+        cat_rows = db.execute(text("SELECT id, name FROM categories")).fetchall()
+        categories = {row[0]: row[1] for row in cat_rows}
+
+        incoming_before: dict[tuple[str, str], int] = {}
+        outgoing_before: dict[tuple[str, str], int] = {}
+        incoming_in: dict[tuple[str, str], int] = {}
+        outgoing_in: dict[tuple[str, str], int] = {}
+
+        if start_utc:
+            rows = db.execute(
+                text(
+                    "SELECT item_type, item_id, SUM(quantity) as qty FROM arrivals "
+                    "WHERE branch_id = :b AND date < :start GROUP BY item_type, item_id"
+                ),
+                params,
+            ).fetchall()
+            for r in rows:
+                incoming_before[(r[0], r[1])] = int(r[2] or 0)
+
+            rows = db.execute(
+                text(
+                    "SELECT di.item_type, di.item_id, SUM(di.quantity) as qty "
+                    "FROM dispensing_records dr JOIN dispensing_items di ON dr.id = di.record_id "
+                    "WHERE dr.branch_id = :b AND dr.date < :start GROUP BY di.item_type, di.item_id"
+                ),
+                params,
+            ).fetchall()
+            for r in rows:
+                outgoing_before[(r[0], r[1])] = int(r[2] or 0)
+
+        sql_inc = (
+            "SELECT item_type, item_id, SUM(quantity) as qty FROM arrivals "
+            "WHERE branch_id = :b AND date <= :end"
+        )
+        if start_utc:
+            sql_inc += " AND date >= :start"
+        sql_inc += " GROUP BY item_type, item_id"
+        rows = db.execute(text(sql_inc), params).fetchall()
+        for r in rows:
+            incoming_in[(r[0], r[1])] = int(r[2] or 0)
+
+        sql_out = (
+            "SELECT di.item_type, di.item_id, SUM(di.quantity) as qty "
+            "FROM dispensing_records dr JOIN dispensing_items di ON dr.id = di.record_id "
+            "WHERE dr.branch_id = :b AND dr.date <= :end"
+        )
+        if start_utc:
+            sql_out += " AND dr.date >= :start"
+        sql_out += " GROUP BY di.item_type, di.item_id"
+        rows = db.execute(text(sql_out), params).fetchall()
+        for r in rows:
+            outgoing_in[(r[0], r[1])] = int(r[2] or 0)
+
+        data = []
+        for item in items:
+            key = (item.type, item.id)
+            opening = (
+                incoming_before.get(key, 0) - outgoing_before.get(key, 0)
+            ) if start_utc else 0
+            closing = opening + incoming_in.get(key, 0) - outgoing_in.get(key, 0)
+            category_name = categories.get(item.category_id, "—") or "—"
+            data.append(
+                {
+                    "type": item.type,
+                    "id": item.id,
+                    "name": item.name,
+                    "category_name": category_name,
+                    "quantity": closing,
+                }
+            )
+
+        return {"data": data}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/reports/stock/item_details")
+async def get_stock_item_details(
+    branch_id: str,
+    type: str,
+    item_id: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        tz = ZoneInfo("Asia/Almaty")
+        if date_to:
+            dt_to = datetime.fromisoformat(date_to)
+            if dt_to.tzinfo is None:
+                dt_to = dt_to.replace(tzinfo=tz)
+            else:
+                dt_to = dt_to.astimezone(tz)
+            dt_to = dt_to.replace(hour=23, minute=59, second=59, microsecond=999999)
+        else:
+            now = datetime.now(tz)
+            dt_to = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        if date_from:
+            dt_from = datetime.fromisoformat(date_from)
+            if dt_from.tzinfo is None:
+                dt_from = dt_from.replace(tzinfo=tz)
+            else:
+                dt_from = dt_from.astimezone(tz)
+            dt_from = dt_from.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_utc = dt_from.astimezone(timezone.utc).replace(tzinfo=None)
+        else:
+            start_utc = None
+        end_utc = dt_to.astimezone(timezone.utc).replace(tzinfo=None)
+
+        params = {"b": branch_id, "t": type, "i": item_id, "end": end_utc}
+        if start_utc:
+            params["start"] = start_utc
+
+        sql_in = (
+            "SELECT date, quantity FROM arrivals "
+            "WHERE branch_id = :b AND item_type = :t AND item_id = :i AND date <= :end"
+        )
+        if start_utc:
+            sql_in += " AND date >= :start"
+        sql_in += " ORDER BY date"
+        incoming_rows = db.execute(text(sql_in), params).fetchall()
+        incoming = [
+            {"date": r[0].isoformat(), "qty": int(r[1])} for r in incoming_rows
+        ]
+
+        sql_out = (
+            "SELECT dr.date, di.quantity FROM dispensing_records dr "
+            "JOIN dispensing_items di ON dr.id = di.record_id "
+            "WHERE dr.branch_id = :b AND di.item_type = :t AND di.item_id = :i AND dr.date <= :end"
+        )
+        if start_utc:
+            sql_out += " AND dr.date >= :start"
+        sql_out += " ORDER BY dr.date"
+        outgoing_rows = db.execute(text(sql_out), params).fetchall()
+        outgoing = [
+            {"date": r[0].isoformat(), "qty": int(r[1])} for r in outgoing_rows
+        ]
+
+        total_in = sum(r["qty"] for r in incoming)
+        total_out = sum(r["qty"] for r in outgoing)
+
+        return {
+            "incoming": incoming,
+            "outgoing": outgoing,
+            "total_in": total_in,
+            "total_out": total_out,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 # Calendar endpoints
 @app.get("/calendar/dispensing")
 async def get_calendar_dispensing(

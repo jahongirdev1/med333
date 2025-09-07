@@ -103,3 +103,18 @@ export interface DispensingRecord {
   medicines?: Array<{medicine_name: string, quantity: number}>;
   medical_devices?: Array<{device_name: string, quantity: number}>;
 }
+
+export interface StockRow {
+  type: 'medicine' | 'medical_device';
+  id: string;
+  name: string;
+  category_name: string;
+  quantity: number;
+}
+
+export interface StockDetails {
+  incoming: Array<{ date: string; qty: number }>;
+  outgoing: Array<{ date: string; qty: number }>;
+  total_in: number;
+  total_out: number;
+}
