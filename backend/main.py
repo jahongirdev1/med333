@@ -1639,16 +1639,15 @@ async def get_dispensings_report(
     return result
 
 
-@app.get("/reports/arrivals")
-def get_arrivals_report(
-    date_from: str,
-    date_to: str,
-    branch_id: str | None = None,
-    format: str | None = None,
-    db: Session = Depends(get_db),
-):
-    start = datetime.fromisoformat(date_from).replace(hour=0, minute=0, second=0, microsecond=0)
-    end = datetime.fromisoformat(date_to).replace(hour=23, minute=59, second=59, microsecond=999999)
+async def build_arrivals_json_payload(
+    *, branch_id: str | None, date_from: str, date_to: str, db: Session
+) -> dict:
+    start = datetime.fromisoformat(date_from).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    end = datetime.fromisoformat(date_to).replace(
+        hour=23, minute=59, second=59, microsecond=999999
+    )
 
     col = pick_arrival_branch_col(DBArrival)
     q = db.query(DBArrival)
@@ -1661,36 +1660,73 @@ def get_arrivals_report(
 
     med_ids = [iid for (t, iid) in name_map if t == "medicine"]
     if med_ids:
-        for m in db.query(DBMedicine.id, DBMedicine.name).filter(DBMedicine.id.in_(med_ids)):
+        for m in db.query(DBMedicine.id, DBMedicine.name).filter(
+            DBMedicine.id.in_(med_ids)
+        ):
             name_map[("medicine", m.id)] = m.name
     dev_ids = [iid for (t, iid) in name_map if t == "medical_device"]
     if dev_ids:
-        for d in db.query(DBMedicalDevice.id, DBMedicalDevice.name).filter(DBMedicalDevice.id.in_(dev_ids)):
+        for d in db.query(DBMedicalDevice.id, DBMedicalDevice.name).filter(
+            DBMedicalDevice.id.in_(dev_ids)
+        ):
             name_map[("medical_device", d.id)] = d.name
 
-    json_rows = []
-    excel_rows = []
+    json_rows: list[dict] = []
     for r in rows:
         dt_iso = r.date.isoformat() if r.date else ""
-        dt_local = fmt_almaty(r.date) if r.date else ""
         name = name_map.get((r.item_type, r.item_id), r.item_name)
         item = {"type": r.item_type, "name": name, "quantity": r.quantity}
         json_rows.append({"id": r.id, "datetime": dt_iso, "items": [item]})
-        excel_rows.append([dt_local, f"{name} — {r.quantity}"])
 
-    if format == "xlsx":
-        content = render_xlsx(
-            headers=["Дата и время", "Поступило (наименование — кол-во)"],
-            rows=excel_rows,
+    return {"data": json_rows}
+
+
+@app.get("/reports/arrivals")
+async def get_arrivals_report(
+    request: Request,
+    date_from: str,
+    date_to: str,
+    branch_id: str | None = Query(None),
+    export: str | None = Query(None),
+    format: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    result = await build_arrivals_json_payload(
+        branch_id=branch_id, date_from=date_from, date_to=date_to, db=db
+    )
+
+    if _wants_excel(request, export, format):
+        rows: list[list[str]] = []
+        for r in result.get("data", []):
+            items_list = r.get("items", []) or []
+            items_human = "; ".join(
+                f"{i.get('name','')} — {i.get('quantity','')}" for i in items_list
+            )
+            rows.append([
+                _to_almaty_str(r.get("datetime", "")),
+                items_human,
+            ])
+
+        content = _render_xlsx(
+            headers=[
+                "Дата и время",
+                "Поступило (наименование — кол-во)",
+            ],
+            rows=rows,
             sheet_name="Поступления",
         )
+
+        safe_to = date_to or datetime.now(ALMATY_TZ).strftime("%Y-%m-%d")
         return Response(
             content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers=ascii_download_headers(f"arrivals_report_{date_to}.xlsx"),
+            headers=_ascii_download_headers(
+                f"arrivals_report_{safe_to}.xlsx"
+            ),
         )
 
-    return {"data": json_rows}
+    return result
+
 
 
 def _parse_date(s: Optional[str]) -> Optional[datetime]:
