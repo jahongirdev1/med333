@@ -1530,122 +1530,124 @@ async def export_incoming_report(
 
 @app.get("/reports/dispensings")
 def get_dispensings_report(
-    branch_id: str,
-    date_from: date,
-    date_to: date,
-    export: Optional[str] = None,
+    date_from: str,
+    date_to: str,
+    branch_id: str | None = None,
+    format: str | None = None,
     db: Session = Depends(get_db),
 ):
-    DI = DBDispensingItem
-    DR = DBDispensingRecord
-    M = DBMedicine
-    MD = DBMedicalDevice
+    start = datetime.fromisoformat(date_from).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = datetime.fromisoformat(date_to).replace(hour=23, minute=59, second=59, microsecond=999999)
 
-    rows = (
-        db.query(
-            DR.id.label("record_id"),
-            DR.patient_name,
-            DR.employee_name,
-            DR.date.label("created_at"),
-            DI.item_type,
-            DI.item_id,
-            DI.quantity,
-            case((DI.item_type == "medicine", M.name), else_=MD.name).label(
-                "item_name"
-            ),
-        )
-        .select_from(DR)
-        .join(DI, DI.record_id == DR.id)
-        .outerjoin(M, and_(DI.item_type == "medicine", M.id == DI.item_id))
-        .outerjoin(
-            MD,
-            and_(DI.item_type == "medical_device", MD.id == DI.item_id),
-        )
-        .filter(DR.branch_id == branch_id)
-        .filter(DR.date >= datetime.combine(date_from, time.min))
-        .filter(DR.date <= datetime.combine(date_to, time.max))
-        .order_by(DR.date.asc())
-        .all()
-    )
+    q = db.query(DBDispensingRecord).options(joinedload(DBDispensingRecord.items))
+    q = q.filter(DBDispensingRecord.date >= start, DBDispensingRecord.date <= end)
+    if branch_id:
+        q = q.filter(DBDispensingRecord.branch_id == branch_id)
+    records = q.all()
 
-    by_record: dict[str, dict] = {}
-    for r in rows:
-        rec = by_record.setdefault(
-            r.record_id,
-            {
-                "patient": r.patient_name or "",
-                "employee": r.employee_name or "",
-                "created_at": r.created_at,
-                "items_details": [],
-                "item_titles": [],
-            },
+    patient_ids = {r.patient_id for r in records}
+    employee_ids = {r.employee_id for r in records}
+    name_map = {(i.item_type, i.item_id): i.item_name for r in records for i in r.items}
+
+    patient_map = {p.id: f"{p.first_name} {p.last_name}".strip() for p in db.query(DBPatient).filter(DBPatient.id.in_(patient_ids)).all()} if patient_ids else {}
+    employee_map = {e.id: f"{e.first_name} {e.last_name}".strip() for e in db.query(DBEmployee).filter(DBEmployee.id.in_(employee_ids)).all()} if employee_ids else {}
+
+    med_ids = [iid for (t, iid) in name_map if t == "medicine"]
+    if med_ids:
+        for m in db.query(DBMedicine.id, DBMedicine.name).filter(DBMedicine.id.in_(med_ids)):
+            name_map[("medicine", m.id)] = m.name
+    dev_ids = [iid for (t, iid) in name_map if t == "medical_device"]
+    if dev_ids:
+        for d in db.query(DBMedicalDevice.id, DBMedicalDevice.name).filter(DBMedicalDevice.id.in_(dev_ids)):
+            name_map[("medical_device", d.id)] = d.name
+
+    json_rows = []
+    rows = []
+    for r in records:
+        patient_full = patient_map.get(r.patient_id, r.patient_name or "")
+        employee_full = employee_map.get(r.employee_id, r.employee_name or "")
+        dt_iso = r.date.isoformat() if r.date else ""
+        dt_local = fmt_almaty(r.date) if r.date else ""
+
+        json_items = []
+        for i in r.items:
+            nm = name_map.get((i.item_type, i.item_id), i.item_name)
+            json_items.append({"type": i.item_type, "name": nm, "quantity": i.quantity})
+        items_human = "; ".join(sorted(f"{it['name']} — {it['quantity']}" for it in json_items))
+
+        json_rows.append({
+            "id": r.id,
+            "patient_name": patient_full,
+            "employee_name": employee_full,
+            "datetime": dt_iso,
+            "items": json_items,
+        })
+        rows.append([patient_full, employee_full, dt_local, items_human])
+
+    if format == "xlsx":
+        content = render_xlsx(
+            headers=["Пациент", "Сотрудник", "Дата и время", "Выдано (наименование — кол-во)"],
+            rows=rows,
+            sheet_name="Выдачи",
         )
-        item = {
-            "type": r.item_type,
-            "name": r.item_name or "",
-            "quantity": int(r.quantity),
-        }
-        rec["items_details"].append(item)
-        rec["item_titles"].append(f"{item['name']} — {item['quantity']} шт")
+        return Response(
+            content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers=ascii_download_headers(f"dispensings_report_{date_to}.xlsx"),
+        )
+
+    return {"data": json_rows}
+
+
+@app.get("/reports/arrivals")
+def get_arrivals_report(
+    date_from: str,
+    date_to: str,
+    branch_id: str | None = None,
+    format: str | None = None,
+    db: Session = Depends(get_db),
+):
+    start = datetime.fromisoformat(date_from).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = datetime.fromisoformat(date_to).replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    col = pick_arrival_branch_col(DBArrival)
+    q = db.query(DBArrival)
+    q = q.filter(DBArrival.date >= start, DBArrival.date <= end)
+    if branch_id:
+        q = q.filter(col == branch_id)
+    rows = q.all()
+
+    name_map = {(r.item_type, r.item_id): r.item_name for r in rows}
+
+    med_ids = [iid for (t, iid) in name_map if t == "medicine"]
+    if med_ids:
+        for m in db.query(DBMedicine.id, DBMedicine.name).filter(DBMedicine.id.in_(med_ids)):
+            name_map[("medicine", m.id)] = m.name
+    dev_ids = [iid for (t, iid) in name_map if t == "medical_device"]
+    if dev_ids:
+        for d in db.query(DBMedicalDevice.id, DBMedicalDevice.name).filter(DBMedicalDevice.id.in_(dev_ids)):
+            name_map[("medical_device", d.id)] = d.name
 
     json_rows = []
     excel_rows = []
-    for rec_id, rec in by_record.items():
-        dt = rec["created_at"]
-        if dt and dt.tzinfo is None:
-            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-        if dt:
-            dt_local = dt.astimezone(ALMATY)
-            dt_iso = dt.isoformat()
-        else:
-            dt_local = None
-            dt_iso = ""
+    for r in rows:
+        dt_iso = r.date.isoformat() if r.date else ""
+        dt_local = fmt_almaty(r.date) if r.date else ""
+        name = name_map.get((r.item_type, r.item_id), r.item_name)
+        item = {"type": r.item_type, "name": name, "quantity": r.quantity}
+        json_rows.append({"id": r.id, "datetime": dt_iso, "items": [item]})
+        excel_rows.append([dt_local, f"{name} — {r.quantity}"])
 
-        json_rows.append(
-            {
-                "id": rec_id,
-                "patient_name": rec["patient"],
-                "employee_name": rec["employee"],
-                "datetime": dt_iso,
-                "items": rec["items_details"],
-            }
+    if format == "xlsx":
+        content = render_xlsx(
+            headers=["Дата и время", "Поступило (наименование — кол-во)"],
+            rows=excel_rows,
+            sheet_name="Поступления",
         )
-
-        excel_rows.append(
-            {
-                "Пациент": rec["patient"],
-                "Сотрудник": rec["employee"],
-                "Дата (Алматы)": dt_local.strftime("%Y-%m-%d %H:%M:%S")
-                if dt_local
-                else "",
-                "Выданные позиции": "; ".join(rec["item_titles"]),
-            }
-        )
-
-    if export == "excel":
-        if Workbook is None:
-            raise HTTPException(status_code=500, detail="openpyxl not installed")
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Отчет по выдачам"
-        headers = ["Пациент", "Сотрудник", "Дата (Алматы)", "Выданные позиции"]
-        ws.append(headers)
-        for row in excel_rows:
-            ws.append([row[h] for h in headers])
-
-        for col_idx in range(1, len(headers) + 1):
-            col = get_column_letter(col_idx)
-            max_len = max((len(str(c.value)) if c.value else 0 for c in ws[col]), default=10)
-            ws.column_dimensions[col].width = min(max_len + 2, 60)
-
-        bio = BytesIO()
-        wb.save(bio)
-        bio.seek(0)
-        filename = f"Отчет по выдачам_{date_to.isoformat()}.xlsx"
         return Response(
-            content=bio.getvalue(),
+            content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers=ascii_download_headers(f"arrivals_report_{date_to}.xlsx"),
         )
 
     return {"data": json_rows}
@@ -1671,6 +1673,42 @@ def pick_col(model, *names, fallback=None):
         if n in cols:
             return n
     return fallback
+
+
+ALMATY_TZ = ZoneInfo("Asia/Almaty")
+
+
+def fmt_almaty(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone(ALMATY_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def ascii_download_headers(filename_ascii: str) -> dict[str, str]:
+    return {"Content-Disposition": f"attachment; filename={filename_ascii}"}
+
+
+def render_xlsx(headers: list[str], rows: list[list[str]], sheet_name: str = "Sheet1") -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_name
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    bio = BytesIO()
+    wb.save(bio)
+    return bio.getvalue()
+
+
+def pick_arrival_branch_col(Arrival):
+    for name in ("to_branch_id", "branch_id"):
+        if hasattr(Arrival, name):
+            return getattr(Arrival, name)
+    for name in ("to_branch", "branch"):
+        if hasattr(Arrival, name):
+            rel = getattr(Arrival, name)
+            return rel.id
+    raise RuntimeError("Arrival: no branch column found")
 
 
 @app.get("/reports/stock")
