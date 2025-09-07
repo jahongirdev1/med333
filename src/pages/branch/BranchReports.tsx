@@ -48,7 +48,11 @@ const BranchReports: React.FC = () => {
 
       switch (selectedReportType) {
         case 'stock':
-          response = await apiService.getStockReport(params);
+          response = await apiService.getStockReport(
+            params.branch_id!,
+            params.date_from,
+            params.date_to
+          );
           break;
         case 'dispensing':
           response = await apiService.getDispensingReport(params as any);

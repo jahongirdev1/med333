@@ -550,9 +550,11 @@ class ApiService {
     return { data: this.normalizeData(res) } as { data: IncomingRow[] };
   }
 
-  async getStockReport(params: { branch_id: string; date_from?: string; date_to?: string }) {
-    const q = new URLSearchParams(params as any).toString();
-    const res = await this.request<any>(`/reports/stock?${q}`);
+  async getStockReport(branchId: string, dateFrom?: string, dateTo?: string) {
+    const qs = new URLSearchParams({ branch_id: branchId });
+    if (dateFrom) qs.set('date_from', dateFrom);
+    if (dateTo) qs.set('date_to', dateTo);
+    const res = await this.request<any>(`/reports/stock?${qs.toString()}`);
     if (res.error) return res;
     return { data: this.normalizeData(res) };
   }
