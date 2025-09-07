@@ -40,25 +40,29 @@ const BranchReports: React.FC = () => {
     setLoading(true);
     try {
       let response;
-      const params = {
-        branch_id: branchId,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined
-      };
-
       switch (selectedReportType) {
-        case 'stock':
-          response = await apiService.getStockReport(
-            params.branch_id!,
-            params.date_from,
-            params.date_to
-          );
+        case 'stock': {
+          const params: Record<string, string> = { branch_id: branchId! };
+          if (dateFrom && dateTo) {
+            params.date_from = new Date(dateFrom).toISOString().split('T')[0];
+            params.date_to = new Date(dateTo).toISOString().split('T')[0];
+          }
+          response = await apiService.getStockReport(params as any);
           break;
+        }
         case 'dispensing':
-          response = await apiService.getDispensingReport(params as any);
+          response = await apiService.getDispensingReport({
+            branch_id: branchId!,
+            date_from: dateFrom || undefined,
+            date_to: dateTo || undefined,
+          } as any);
           break;
         case 'arrivals':
-          response = await apiService.getIncomingReport(params as any);
+          response = await apiService.getIncomingReport({
+            branch_id: branchId!,
+            date_from: dateFrom || undefined,
+            date_to: dateTo || undefined,
+          } as any);
           break;
         default:
           throw new Error('Unknown report type');
@@ -83,7 +87,19 @@ const BranchReports: React.FC = () => {
     }
 
     const reportType = reportTypes.find(r => r.value === selectedReportType);
-    const worksheet = XLSX.utils.json_to_sheet(reportData);
+    let worksheet;
+    if (selectedReportType === 'stock') {
+      const rows = reportData.map((r: any) => ({
+        'Название': r.name,
+        'Категория': r.category ?? '—',
+        'Количество': r.quantity,
+      }));
+      worksheet = XLSX.utils.json_to_sheet(rows, {
+        header: ['Название', 'Категория', 'Количество'],
+      });
+    } else {
+      worksheet = XLSX.utils.json_to_sheet(reportData);
+    }
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Report');
     
@@ -136,20 +152,14 @@ const BranchReports: React.FC = () => {
               <TableHead>Название</TableHead>
               <TableHead>Категория</TableHead>
               <TableHead>Количество</TableHead>
-              <TableHead>Действия</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {reportData.map((item: any) => (
-              <TableRow key={item.id}>
+              <TableRow key={`${item.item_type}-${item.item_id}`}>
                 <TableCell>{item.name}</TableCell>
-                <TableCell>{item.category_name || '—'}</TableCell>
+                <TableCell>{item.category ?? '—'}</TableCell>
                 <TableCell>{item.quantity}</TableCell>
-                <TableCell>
-                  <Button variant="outline" size="sm" onClick={() => showItemDetails(item)}>
-                    Подробнее
-                  </Button>
-                </TableCell>
               </TableRow>
             ))}
           </TableBody>
