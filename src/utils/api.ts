@@ -534,6 +534,26 @@ class ApiService {
     });
   }
 
+  async getStockReport(params: { branch_id: string; date_from?: string; date_to?: string }) {
+    const q = new URLSearchParams(params as any).toString();
+    const res = await this.request<any>(`/reports/stock?${q}`);
+    if (res.error) return res;
+    return { data: this.normalizeData(res) };
+  }
+
+  async getStockItemDetails(params: {
+    branch_id: string;
+    type: 'medicine' | 'medical_device';
+    item_id: string;
+    date_from?: string;
+    date_to?: string;
+  }) {
+    const q = new URLSearchParams(params as any).toString();
+    const res = await this.request<any>(`/reports/stock/item_details?${q}`);
+    if (res.error) return res;
+    return { data: this.normalizeData(res) };
+  }
+
   // Mark calendar event as dispensed
   async markDispensedOnCalendar(patientId: string, dateISO: string) {
     return this.request<any>('/calendar/mark-dispensed', {

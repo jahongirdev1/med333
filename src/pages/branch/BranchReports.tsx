@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from '@/hooks/use-toast';
 import * as XLSX from 'xlsx';
+import type { StockDetails } from '@/types';
 
 const BranchReports: React.FC = () => {
   const currentUser = storage.getCurrentUser();
@@ -22,6 +23,7 @@ const BranchReports: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [stockDetails, setStockDetails] = useState<StockDetails | null>(null);
 
   const reportTypes = [
     { value: 'stock', label: 'Отчет по остаткам', icon: Package },
@@ -46,7 +48,7 @@ const BranchReports: React.FC = () => {
 
       switch (selectedReportType) {
         case 'stock':
-          response = await apiService.getMedicines(branchId);
+          response = await apiService.getStockReport(params);
           break;
         case 'dispensing':
           response = await apiService.getDispensings(branchId);
@@ -88,8 +90,30 @@ const BranchReports: React.FC = () => {
   };
 
   const showItemDetails = async (item: any) => {
-    setSelectedItem(item);
-    setShowDetails(true);
+    if (selectedReportType === 'stock') {
+      try {
+        const res = await apiService.getStockItemDetails({
+          branch_id: branchId,
+          type: item.type,
+          item_id: item.id,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+        });
+        if (res.data) {
+          setSelectedItem(item);
+          setStockDetails(res.data);
+          setShowDetails(true);
+        } else {
+          toast({ title: 'Ошибка формирования отчета', variant: 'destructive' });
+        }
+      } catch {
+        toast({ title: 'Ошибка формирования отчета', variant: 'destructive' });
+      }
+    } else {
+      setSelectedItem(item);
+      setStockDetails(null);
+      setShowDetails(true);
+    }
   };
 
   const getReportIcon = (type: string) => {
@@ -100,8 +124,36 @@ const BranchReports: React.FC = () => {
   const renderReportTable = () => {
     if (reportData.length === 0) return null;
 
+    if (selectedReportType === 'stock') {
+      return (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Название</TableHead>
+              <TableHead>Категория</TableHead>
+              <TableHead>Количество</TableHead>
+              <TableHead>Действия</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {reportData.map((item: any) => (
+              <TableRow key={item.id}>
+                <TableCell>{item.name}</TableCell>
+                <TableCell>{item.category_name || '—'}</TableCell>
+                <TableCell>{item.quantity}</TableCell>
+                <TableCell>
+                  <Button variant="outline" size="sm" onClick={() => showItemDetails(item)}>
+                    Подробнее
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      );
+    }
+
     const columns = Object.keys(reportData[0]);
-    
     return (
       <Table>
         <TableHeader>
@@ -119,8 +171,8 @@ const BranchReports: React.FC = () => {
             <TableRow key={index}>
               {columns.map((column) => (
                 <TableCell key={column}>
-                  {typeof item[column] === 'object' ? 
-                    JSON.stringify(item[column]) : 
+                  {typeof item[column] === 'object' ?
+                    JSON.stringify(item[column]) :
                     String(item[column] || '-')
                   }
                 </TableCell>
@@ -236,17 +288,68 @@ const BranchReports: React.FC = () => {
       <Dialog open={showDetails} onOpenChange={setShowDetails}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Подробная информация</DialogTitle>
+            <DialogTitle>Детали по остатку</DialogTitle>
           </DialogHeader>
-          {selectedItem && (
-            <div className="space-y-4">
-              {Object.entries(selectedItem).map(([key, value]) => (
-                <div key={key} className="grid grid-cols-2 gap-4">
-                  <div className="font-medium capitalize">{key.replace(/_/g, ' ')}:</div>
-                  <div>{typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value || '-')}</div>
+          {selectedReportType === 'stock' && stockDetails ? (
+            stockDetails.incoming.length === 0 && stockDetails.outgoing.length === 0 ? (
+              <p className="text-center py-4">Нет данных за выбранный период.</p>
+            ) : (
+              <div className="space-y-6">
+                <div>
+                  <h3 className="font-medium mb-2">Поступления</h3>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Дата</TableHead>
+                        <TableHead>Количество</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {stockDetails.incoming.map((row, idx) => (
+                        <TableRow key={idx}>
+                          <TableCell>{new Date(row.date).toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}</TableCell>
+                          <TableCell>{row.qty}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
-              ))}
-            </div>
+                <div>
+                  <h3 className="font-medium mb-2">Выдачи</h3>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Дата</TableHead>
+                        <TableHead>Количество</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {stockDetails.outgoing.map((row, idx) => (
+                        <TableRow key={idx}>
+                          <TableCell>{new Date(row.date).toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}</TableCell>
+                          <TableCell>{row.qty}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <div className="flex justify-end gap-8 pt-2">
+                  <div>Итого поступило: {stockDetails.total_in}</div>
+                  <div>Итого выдано: {stockDetails.total_out}</div>
+                </div>
+              </div>
+            )
+          ) : (
+            selectedItem && (
+              <div className="space-y-4">
+                {Object.entries(selectedItem).map(([key, value]) => (
+                  <div key={key} className="grid grid-cols-2 gap-4">
+                    <div className="font-medium capitalize">{key.replace(/_/g, ' ')}:</div>
+                    <div>{typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value || '-')}</div>
+                  </div>
+                ))}
+              </div>
+            )
           )}
         </DialogContent>
       </Dialog>
