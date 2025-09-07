@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Query
-from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import (
     text,
@@ -16,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.sql.schema import Column
 from database import get_db, create_tables, engine, User as DBUser, Branch as DBBranch, Medicine as DBMedicine, Employee as DBEmployee, Patient as DBPatient, Transfer as DBTransfer, DispensingRecord as DBDispensingRecord, DispensingItem as DBDispensingItem, Arrival as DBArrival, Category as DBCategory, MedicalDevice as DBMedicalDevice, Shipment as DBShipment, ShipmentItem as DBShipmentItem, Notification as DBNotification
 from schemas import *
-from typing import List, Optional
+from typing import List, Optional, Iterable, Callable
 from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 import uuid
@@ -25,6 +26,12 @@ from pydantic import ValidationError
 from services.stock import get_available_qty, decrement_stock, ItemType
 import traceback
 import logging
+import re
+from io import BytesIO
+try:
+    from openpyxl import Workbook
+except ImportError:  # pragma: no cover
+    Workbook = None
 
 logger = logging.getLogger(__name__)
 
@@ -1381,177 +1388,254 @@ async def get_incoming_report(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _parse_date(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    s = str(s).strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y/%m/%d"):
+        try:
+            d = datetime.strptime(s, fmt)
+            return datetime(d.year, d.month, d.day)
+        except ValueError:
+            continue
+    raise HTTPException(status_code=400, detail=f"Bad date format: {s}")
+
+
+def pick_col(
+    model,
+    preferred_names: Iterable[str],
+    fallback: Optional[Callable[[Column], bool]] = None,
+) -> Column:
+    for name in preferred_names:
+        col = getattr(model, name, None)
+        if isinstance(col, Column) or (
+            hasattr(col, "expression") and hasattr(col, "key")
+        ):
+            return col
+    for c in model.__table__.c:
+        if fallback and fallback(c):
+            return c
+    pname = "|".join([re.escape(n) for n in preferred_names])
+    cols = ", ".join([c.name for c in model.__table__.c])
+    raise RuntimeError(
+        f"{model.__name__}: none of [{pname}] found. Available columns: {cols}"
+    )
+
+
 @app.get("/reports/stock")
-async def get_stock_report(
+def get_stock_report(
+    branch_id: str = Query(..., alias="branch_id"),
+    date_from: Optional[str] = Query(None, alias="date_from"),
+    date_to: Optional[str] = Query(None, alias="date_to"),
+    db: Session = Depends(get_db),
+):
+    start = _parse_date(date_from)
+    end = _parse_date(date_to)
+    try:
+        arrival_branch_col = pick_col(
+            DBArrival,
+            [
+                "to_branch_id",
+                "branch_id",
+                "to_branch",
+                "branch",
+                "destination_branch_id",
+                "dest_branch_id",
+            ],
+            lambda c: ("branch" in c.name.lower())
+            and c.name.lower().endswith(("id", "_id")),
+        )
+        arrival_dt_col = pick_col(
+            DBArrival,
+            ["created_at", "date", "created", "timestamp"],
+            lambda c: isinstance(c.type, (DateTime, Date)),
+        )
+        record_dt_col = pick_col(
+            DBDispensingRecord,
+            ["created_at", "date", "created", "timestamp"],
+            lambda c: isinstance(c.type, (DateTime, Date)),
+        )
+        try:
+            record_branch_col = DBDispensingRecord.branch_id
+        except AttributeError:
+            record_branch_col = pick_col(
+                DBDispensingRecord,
+                ["branch_id", "from_branch_id", "branch"],
+                lambda c: ("branch" in c.name.lower())
+                and c.name.lower().endswith(("id", "_id")),
+            )
+
+        arr_base = (
+            select(
+                DBArrival.item_type,
+                DBArrival.item_id,
+                func.coalesce(func.sum(DBArrival.quantity), 0).label("qty"),
+            )
+            .where(arrival_branch_col == branch_id)
+            .group_by(DBArrival.item_type, DBArrival.item_id)
+        )
+
+        out_base = (
+            select(
+                DBDispensingItem.item_type,
+                DBDispensingItem.item_id,
+                func.coalesce(func.sum(DBDispensingItem.quantity), 0).label("qty"),
+            )
+            .join(
+                DBDispensingRecord, DBDispensingRecord.id == DBDispensingItem.record_id
+            )
+            .where(record_branch_col == branch_id)
+            .group_by(DBDispensingItem.item_type, DBDispensingItem.item_id)
+        )
+
+        empty = (
+            select(literal_column("1"))
+            .where(literal_column("1") == literal_column("0"))
+            .subquery()
+        )
+
+        if start:
+            start_in = arr_base.where(arrival_dt_col < start).subquery()
+            start_out = out_base.where(record_dt_col < start).subquery()
+        else:
+            start_in = empty
+            start_out = empty
+
+        if start and end:
+            pin = (
+                arr_base.where(
+                    and_(arrival_dt_col >= start, arrival_dt_col <= end)
+                ).subquery()
+            )
+            pout = (
+                out_base.where(
+                    and_(record_dt_col >= start, record_dt_col <= end)
+                ).subquery()
+            )
+        else:
+            pin = arr_base.subquery()
+            pout = out_base.subquery()
+
+        sums = union_all(
+            select(start_in.c.item_type, start_in.c.item_id, start_in.c.qty),
+            select(start_out.c.item_type, start_out.c.item_id, -start_out.c.qty),
+            select(pin.c.item_type, pin.c.item_id, pin.c.qty),
+            select(pout.c.item_type, pout.c.item_id, -pout.c.qty),
+        ).subquery("sums")
+
+        base = (
+            select(
+                sums.c.item_type.label("item_type"),
+                sums.c.item_id.label("item_id"),
+                func.coalesce(func.sum(sums.c.qty), 0).label("quantity"),
+            )
+            .group_by(sums.c.item_type, sums.c.item_id)
+            .subquery("base")
+        )
+
+        meds = (
+            select(
+                base.c.item_type,
+                base.c.item_id,
+                base.c.quantity,
+                DBMedicine.name.label("name"),
+                DBCategory.name.label("category"),
+            )
+            .join(
+                DBMedicine,
+                and_(
+                    base.c.item_type == literal_column("'medicine'"),
+                    DBMedicine.id == base.c.item_id,
+                ),
+            )
+            .join(DBCategory, DBCategory.id == DBMedicine.category_id, isouter=True)
+        )
+
+        devs = (
+            select(
+                base.c.item_type,
+                base.c.item_id,
+                base.c.quantity,
+                DBMedicalDevice.name.label("name"),
+                DBCategory.name.label("category"),
+            )
+            .join(
+                DBMedicalDevice,
+                and_(
+                    base.c.item_type
+                    == literal_column("'medical_device'"),
+                    DBMedicalDevice.id == base.c.item_id,
+                ),
+            )
+            .join(
+                DBCategory, DBCategory.id == DBMedicalDevice.category_id, isouter=True
+            )
+        )
+
+        final = (
+            select("*")
+            .select_from(union_all(meds, devs).subquery("u"))
+            .where(literal_column("quantity") > 0)
+            .order_by(literal_column("item_type"), literal_column("name"))
+        )
+
+        rows = db.execute(final).mappings().all()
+
+        result = [
+            {
+                "type": r["item_type"],
+                "id": r["item_id"],
+                "Название": r.get("name") or "",
+                "Категория": r.get("category") or "",
+                "Количество": int(r["quantity"] or 0),
+            }
+            for r in rows
+        ]
+        import logging
+
+        logger = logging.getLogger("uvicorn.error")
+        logger.info(
+            "Stock report: arrivals branch col=%s, date col=%s",
+            arrival_branch_col.key,
+            arrival_dt_col.key,
+        )
+        return {"data": result}
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/reports/stock/export")
+def export_stock_xlsx(
     branch_id: str = Query(...),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    def parse_date(s: Optional[str]) -> Optional[date]:
-        if not s:
-            return None
-        for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
-            try:
-                return datetime.strptime(s, fmt).date()
-            except ValueError:
-                continue
-        raise HTTPException(status_code=400, detail=f"Invalid date: {s}")
-
-    def pick_col(model, preferred_names, fallback_predicate=None) -> Column:
-        for name in preferred_names:
-            col = getattr(model, name, None)
-            if col is not None:
-                return col
-        for c in model.__table__.c:
-            if fallback_predicate and fallback_predicate(c):
-                return c
-        raise RuntimeError(
-            f"{model.__name__}: none of {preferred_names} found and no fallback match"
-        )
-
-    date_from_val = parse_date(date_from)
-    date_to_val = parse_date(date_to)
-
-    arrival_branch_col = pick_col(
-        DBArrival,
-        ["to_branch_id", "branch_id", "to_branch", "branch"],
-        lambda c: c.name.endswith("branch_id") or c.name in ("to_branch", "branch"),
+    if Workbook is None:
+        raise HTTPException(status_code=500, detail="openpyxl not installed")
+    payload = get_stock_report(
+        branch_id=branch_id, date_from=date_from, date_to=date_to, db=db
     )
-    arrival_dt_col = pick_col(
-        DBArrival,
-        ["created_at", "date", "created", "timestamp"],
-        lambda c: isinstance(c.type, (DateTime, Date)),
+    rows = payload["data"]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Остатки"
+
+    headers = ["Название", "Категория", "Количество", "Тип"]
+    ws.append(headers)
+    for r in rows:
+        ws.append([r["Название"], r["Категория"], r["Количество"], r["type"]])
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = "Остатки.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
-    record_dt_col = pick_col(
-        DBDispensingRecord,
-        ["created_at", "date", "created", "timestamp"],
-        lambda c: isinstance(c.type, (DateTime, Date)),
-    )
-    record_branch_col = DBDispensingRecord.branch_id
-
-    logger.info(
-        "Stock report uses arrivals.%s and arrivals.%s",
-        arrival_branch_col.key,
-        arrival_dt_col.key,
-    )
-
-    arr_base = (
-        select(
-            DBArrival.item_type,
-            DBArrival.item_id,
-            func.coalesce(func.sum(DBArrival.quantity), 0).label("qty"),
-        )
-        .where(arrival_branch_col == branch_id)
-        .group_by(DBArrival.item_type, DBArrival.item_id)
-    )
-
-    out_base = (
-        select(
-            DBDispensingItem.item_type,
-            DBDispensingItem.item_id,
-            func.coalesce(func.sum(DBDispensingItem.quantity), 0).label("qty"),
-        )
-        .join(DBDispensingRecord, DBDispensingRecord.id == DBDispensingItem.record_id)
-        .where(record_branch_col == branch_id)
-        .group_by(DBDispensingItem.item_type, DBDispensingItem.item_id)
-    )
-
-    empty = select(literal_column("'x'")).where(literal_column("false"))
-
-    if date_from_val:
-        start_in = arr_base.where(arrival_dt_col < date_from_val).subquery()
-        start_out = out_base.where(record_dt_col < date_from_val).subquery()
-    else:
-        start_in = empty.subquery()
-        start_out = empty.subquery()
-
-    if date_from_val and date_to_val:
-        pin = (
-            arr_base.where(
-                and_(
-                    arrival_dt_col >= date_from_val,
-                    arrival_dt_col <= date_to_val,
-                )
-            ).subquery()
-        )
-        pout = (
-            out_base.where(
-                and_(record_dt_col >= date_from_val, record_dt_col <= date_to_val)
-            ).subquery()
-        )
-    else:
-        pin = arr_base.subquery()
-        pout = out_base.subquery()
-
-    sums = union_all(
-        select(start_in.c.item_type, start_in.c.item_id, start_in.c.qty),
-        select(start_out.c.item_type, start_out.c.item_id, -start_out.c.qty),
-        select(pin.c.item_type, pin.c.item_id, pin.c.qty),
-        select(pout.c.item_type, pout.c.item_id, -pout.c.qty),
-    ).subquery("sums")
-
-    base = (
-        select(
-            sums.c.item_type.label("item_type"),
-            sums.c.item_id.label("item_id"),
-            func.coalesce(func.sum(sums.c.qty), 0).label("quantity"),
-        )
-        .group_by(sums.c.item_type, sums.c.item_id)
-        .subquery("base")
-    )
-
-    meds = (
-        select(
-            base.c.item_type,
-            base.c.item_id,
-            base.c.quantity,
-            DBMedicine.name.label("name"),
-            DBCategory.name.label("category"),
-        )
-        .join(
-            DBMedicine,
-            and_(base.c.item_type == "medicine", DBMedicine.id == base.c.item_id),
-        )
-        .join(DBCategory, DBCategory.id == DBMedicine.category_id, isouter=True)
-    )
-
-    devs = (
-        select(
-            base.c.item_type,
-            base.c.item_id,
-            base.c.quantity,
-            DBMedicalDevice.name.label("name"),
-            DBCategory.name.label("category"),
-        )
-        .join(
-            DBMedicalDevice,
-            and_(
-                base.c.item_type == "medical_device",
-                DBMedicalDevice.id == base.c.item_id,
-            ),
-        )
-        .join(DBCategory, DBCategory.id == DBMedicalDevice.category_id, isouter=True)
-    )
-
-    final = (
-        select("*")
-        .select_from(union_all(meds, devs).subquery("u"))
-        .where(literal_column("quantity") > 0)
-        .order_by(literal_column("item_type"), literal_column("name"))
-    )
-
-    rows = db.execute(final).mappings().all()
-    return [
-        {
-            "type": r["item_type"],
-            "id": r["item_id"],
-            "name": r.get("name") or "",
-            "category": r.get("category") or "",
-            "quantity": int(r["quantity"] or 0),
-        }
-        for r in rows
-    ]
 
 
 @app.get("/reports/stock/item_details")
