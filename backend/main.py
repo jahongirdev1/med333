@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
@@ -1369,123 +1369,107 @@ async def get_incoming_report(
 
 @app.get("/reports/stock")
 async def get_stock_report(
-    branch_id: str,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
+    branch_id: str = Query(...),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
     db: Session = Depends(get_db),
 ):
-    try:
-        tz = ZoneInfo("Asia/Almaty")
-        if date_to:
-            dt_to = datetime.fromisoformat(date_to)
-            if dt_to.tzinfo is None:
-                dt_to = dt_to.replace(tzinfo=tz)
-            else:
-                dt_to = dt_to.astimezone(tz)
-            dt_to = dt_to.replace(hour=23, minute=59, second=59, microsecond=999999)
-        else:
-            now = datetime.now(tz)
-            dt_to = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    params = {"branch_id": branch_id}
 
-        if date_from:
-            dt_from = datetime.fromisoformat(date_from)
-            if dt_from.tzinfo is None:
-                dt_from = dt_from.replace(tzinfo=tz)
-            else:
-                dt_from = dt_from.astimezone(tz)
-            dt_from = dt_from.replace(hour=0, minute=0, second=0, microsecond=0)
-            start_utc = dt_from.astimezone(timezone.utc).replace(tzinfo=None)
-        else:
-            start_utc = None
-        end_utc = dt_to.astimezone(timezone.utc).replace(tzinfo=None)
+    if date_from:
+        params["start"] = date_from
+        start_in_sql = """
+            SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
+            FROM arrivals a
+            WHERE a.to_branch_id = :branch_id AND a.created_at < :start
+            GROUP BY item_type, item_id
+        """
+        start_out_sql = """
+            SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
+            FROM dispensing_items di
+            JOIN dispensing_records dr ON dr.id = di.record_id
+            WHERE dr.branch_id = :branch_id AND dr.created_at < :start
+            GROUP BY di.item_type, di.item_id
+        """
+    else:
+        start_in_sql = "SELECT item_type, item_id, 0::bigint AS qty WHERE FALSE"
+        start_out_sql = "SELECT item_type, item_id, 0::bigint AS qty WHERE FALSE"
 
-        params = {"b": branch_id, "end": end_utc}
-        if start_utc:
-            params["start"] = start_utc
+    if date_from and date_to:
+        params["start"] = date_from
+        params["end"] = date_to
+        period_in_sql = """
+            SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
+            FROM arrivals a
+            WHERE a.to_branch_id = :branch_id
+              AND a.created_at >= :start AND a.created_at <= :end
+            GROUP BY item_type, item_id
+        """
+        period_out_sql = """
+            SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
+            FROM dispensing_items di
+            JOIN dispensing_records dr ON dr.id = di.record_id
+            WHERE dr.branch_id = :branch_id
+              AND dr.created_at >= :start AND dr.created_at <= :end
+            GROUP BY di.item_type, di.item_id
+        """
+    else:
+        period_in_sql = """
+            SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
+            FROM arrivals a
+            WHERE a.to_branch_id = :branch_id
+            GROUP BY item_type, item_id
+        """
+        period_out_sql = """
+            SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
+            FROM dispensing_items di
+            JOIN dispensing_records dr ON dr.id = di.record_id
+            WHERE dr.branch_id = :branch_id
+            GROUP BY di.item_type, di.item_id
+        """
 
-        items = db.execute(
-            text(
-                "SELECT id, name, category_id, 'medicine' AS type FROM medicines WHERE branch_id = :b "
-                "UNION ALL "
-                "SELECT id, name, category_id, 'medical_device' AS type FROM medical_devices WHERE branch_id = :b"
-            ),
-            {"b": branch_id},
-        ).fetchall()
+    final_sql = f"""
+        WITH start_in AS ({start_in_sql}),
+             start_out AS ({start_out_sql}),
+             pin AS ({period_in_sql}),
+             pout AS ({period_out_sql}),
+             base AS (
+                 SELECT item_type, item_id,
+                        COALESCE(SUM(qty),0) AS quantity
+                 FROM (
+                     SELECT item_type, item_id, qty FROM start_in
+                     UNION ALL
+                     SELECT item_type, item_id, -qty FROM start_out
+                     UNION ALL
+                     SELECT item_type, item_id, qty FROM pin
+                     UNION ALL
+                     SELECT item_type, item_id, -qty FROM pout
+                 ) s
+                 GROUP BY item_type, item_id
+             )
+        SELECT b.item_type, b.item_id, b.quantity,
+               COALESCE(m.name, md.name) AS name,
+               COALESCE(mc.name, mdc.name) AS category
+        FROM base b
+        LEFT JOIN medicines m ON b.item_type = 'medicine' AND m.id = b.item_id
+        LEFT JOIN categories mc ON mc.id = m.category_id
+        LEFT JOIN medical_devices md ON b.item_type = 'medical_device' AND md.id = b.item_id
+        LEFT JOIN categories mdc ON mdc.id = md.category_id
+        WHERE b.quantity > 0
+        ORDER BY b.item_type, name
+    """
 
-        cat_rows = db.execute(text("SELECT id, name FROM categories")).fetchall()
-        categories = {row[0]: row[1] for row in cat_rows}
-
-        incoming_before: dict[tuple[str, str], int] = {}
-        outgoing_before: dict[tuple[str, str], int] = {}
-        incoming_in: dict[tuple[str, str], int] = {}
-        outgoing_in: dict[tuple[str, str], int] = {}
-
-        if start_utc:
-            rows = db.execute(
-                text(
-                    "SELECT item_type, item_id, SUM(quantity) as qty FROM arrivals "
-                    "WHERE branch_id = :b AND date < :start GROUP BY item_type, item_id"
-                ),
-                params,
-            ).fetchall()
-            for r in rows:
-                incoming_before[(r[0], r[1])] = int(r[2] or 0)
-
-            rows = db.execute(
-                text(
-                    "SELECT di.item_type, di.item_id, SUM(di.quantity) as qty "
-                    "FROM dispensing_records dr JOIN dispensing_items di ON dr.id = di.record_id "
-                    "WHERE dr.branch_id = :b AND dr.date < :start GROUP BY di.item_type, di.item_id"
-                ),
-                params,
-            ).fetchall()
-            for r in rows:
-                outgoing_before[(r[0], r[1])] = int(r[2] or 0)
-
-        sql_inc = (
-            "SELECT item_type, item_id, SUM(quantity) as qty FROM arrivals "
-            "WHERE branch_id = :b AND date <= :end"
-        )
-        if start_utc:
-            sql_inc += " AND date >= :start"
-        sql_inc += " GROUP BY item_type, item_id"
-        rows = db.execute(text(sql_inc), params).fetchall()
-        for r in rows:
-            incoming_in[(r[0], r[1])] = int(r[2] or 0)
-
-        sql_out = (
-            "SELECT di.item_type, di.item_id, SUM(di.quantity) as qty "
-            "FROM dispensing_records dr JOIN dispensing_items di ON dr.id = di.record_id "
-            "WHERE dr.branch_id = :b AND dr.date <= :end"
-        )
-        if start_utc:
-            sql_out += " AND dr.date >= :start"
-        sql_out += " GROUP BY di.item_type, di.item_id"
-        rows = db.execute(text(sql_out), params).fetchall()
-        for r in rows:
-            outgoing_in[(r[0], r[1])] = int(r[2] or 0)
-
-        data = []
-        for item in items:
-            key = (item.type, item.id)
-            opening = (
-                incoming_before.get(key, 0) - outgoing_before.get(key, 0)
-            ) if start_utc else 0
-            closing = opening + incoming_in.get(key, 0) - outgoing_in.get(key, 0)
-            category_name = categories.get(item.category_id, "—") or "—"
-            data.append(
-                {
-                    "type": item.type,
-                    "id": item.id,
-                    "name": item.name,
-                    "category_name": category_name,
-                    "quantity": closing,
-                }
-            )
-
-        return {"data": data}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    rows = db.execute(text(final_sql), params).mappings().all()
+    return [
+        {
+            "type": r["item_type"],
+            "id": r["item_id"],
+            "name": r["name"] or "",
+            "category": r["category"] or "",
+            "quantity": int(r["quantity"] or 0),
+        }
+        for r in rows
+    ]
 
 
 @app.get("/reports/stock/item_details")
