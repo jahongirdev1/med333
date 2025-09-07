@@ -10,11 +10,14 @@ from sqlalchemy import (
     union_all,
     literal_column,
     case,
+    DateTime,
+    Date,
 )
+from sqlalchemy.sql.schema import Column
 from database import get_db, create_tables, engine, User as DBUser, Branch as DBBranch, Medicine as DBMedicine, Employee as DBEmployee, Patient as DBPatient, Transfer as DBTransfer, DispensingRecord as DBDispensingRecord, DispensingItem as DBDispensingItem, Arrival as DBArrival, Category as DBCategory, MedicalDevice as DBMedicalDevice, Shipment as DBShipment, ShipmentItem as DBShipmentItem, Notification as DBNotification
 from schemas import *
 from typing import List, Optional
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 import uuid
 import json
@@ -1381,31 +1384,57 @@ async def get_incoming_report(
 @app.get("/reports/stock")
 async def get_stock_report(
     branch_id: str = Query(...),
-    date_from: Optional[datetime] = Query(None),
-    date_to: Optional[datetime] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    def pick(model, *names):
-        for n in names:
-            col = getattr(model, n, None)
+    def parse_date(s: Optional[str]) -> Optional[date]:
+        if not s:
+            return None
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        raise HTTPException(status_code=400, detail=f"Invalid date: {s}")
+
+    def pick_col(model, preferred_names, fallback_predicate=None) -> Column:
+        for name in preferred_names:
+            col = getattr(model, name, None)
             if col is not None:
                 return col
-        raise RuntimeError(f"{model.__name__}: none of columns {names} found")
+        for c in model.__table__.c:
+            if fallback_predicate and fallback_predicate(c):
+                return c
+        raise RuntimeError(
+            f"{model.__name__}: none of {preferred_names} found and no fallback match"
+        )
 
-    arrival_branch = pick(DBArrival, "to_branch_id", "branch_id")
-    arrival_dt = pick(DBArrival, "created_at", "date")
-    record_dt = pick(DBDispensingRecord, "created_at", "date")
-    record_branch = DBDispensingRecord.branch_id
+    date_from_val = parse_date(date_from)
+    date_to_val = parse_date(date_to)
+
+    arrival_branch_col = pick_col(
+        DBArrival,
+        ["to_branch_id", "branch_id", "to_branch", "branch"],
+        lambda c: c.name.endswith("branch_id") or c.name in ("to_branch", "branch"),
+    )
+    arrival_dt_col = pick_col(
+        DBArrival,
+        ["created_at", "date", "created", "timestamp"],
+        lambda c: isinstance(c.type, (DateTime, Date)),
+    )
+    record_dt_col = pick_col(
+        DBDispensingRecord,
+        ["created_at", "date", "created", "timestamp"],
+        lambda c: isinstance(c.type, (DateTime, Date)),
+    )
+    record_branch_col = DBDispensingRecord.branch_id
 
     logger.info(
         "Stock report uses arrivals.%s and arrivals.%s",
-        arrival_branch.key,
-        arrival_dt.key,
+        arrival_branch_col.key,
+        arrival_dt_col.key,
     )
-
-    branch_id_param = literal_column(":branch_id")
-    date_from_param = literal_column(":date_from")
-    date_to_param = literal_column(":date_to")
 
     arr_base = (
         select(
@@ -1413,7 +1442,7 @@ async def get_stock_report(
             DBArrival.item_id,
             func.coalesce(func.sum(DBArrival.quantity), 0).label("qty"),
         )
-        .where(arrival_branch == branch_id_param)
+        .where(arrival_branch_col == branch_id)
         .group_by(DBArrival.item_type, DBArrival.item_id)
     )
 
@@ -1424,34 +1453,31 @@ async def get_stock_report(
             func.coalesce(func.sum(DBDispensingItem.quantity), 0).label("qty"),
         )
         .join(DBDispensingRecord, DBDispensingRecord.id == DBDispensingItem.record_id)
-        .where(record_branch == branch_id_param)
+        .where(record_branch_col == branch_id)
         .group_by(DBDispensingItem.item_type, DBDispensingItem.item_id)
     )
 
-    if date_from:
-        start_in = arr_base.where(arrival_dt < date_from_param).subquery()
-        start_out = out_base.where(record_dt < date_from_param).subquery()
-    else:
-        start_in = (
-            select(literal_column("'medicine'"))
-            .where(literal_column("false"))
-            .subquery()
-        )
-        start_out = (
-            select(literal_column("'medicine'"))
-            .where(literal_column("false"))
-            .subquery()
-        )
+    empty = select(literal_column("'x'")).where(literal_column("false"))
 
-    if date_from and date_to:
+    if date_from_val:
+        start_in = arr_base.where(arrival_dt_col < date_from_val).subquery()
+        start_out = out_base.where(record_dt_col < date_from_val).subquery()
+    else:
+        start_in = empty.subquery()
+        start_out = empty.subquery()
+
+    if date_from_val and date_to_val:
         pin = (
             arr_base.where(
-                and_(arrival_dt >= date_from_param, arrival_dt <= date_to_param)
+                and_(
+                    arrival_dt_col >= date_from_val,
+                    arrival_dt_col <= date_to_val,
+                )
             ).subquery()
         )
         pout = (
             out_base.where(
-                and_(record_dt >= date_from_param, record_dt <= date_to_param)
+                and_(record_dt_col >= date_from_val, record_dt_col <= date_to_val)
             ).subquery()
         )
     else:
@@ -1463,7 +1489,7 @@ async def get_stock_report(
         select(start_out.c.item_type, start_out.c.item_id, -start_out.c.qty),
         select(pin.c.item_type, pin.c.item_id, pin.c.qty),
         select(pout.c.item_type, pout.c.item_id, -pout.c.qty),
-    ).subquery()
+    ).subquery("sums")
 
     base = (
         select(
@@ -1472,7 +1498,7 @@ async def get_stock_report(
             func.coalesce(func.sum(sums.c.qty), 0).label("quantity"),
         )
         .group_by(sums.c.item_type, sums.c.item_id)
-        .subquery()
+        .subquery("base")
     )
 
     meds = (
@@ -1486,7 +1512,6 @@ async def get_stock_report(
         .join(
             DBMedicine,
             and_(base.c.item_type == "medicine", DBMedicine.id == base.c.item_id),
-            isouter=False,
         )
         .join(DBCategory, DBCategory.id == DBMedicine.category_id, isouter=True)
     )
@@ -1505,22 +1530,18 @@ async def get_stock_report(
                 base.c.item_type == "medical_device",
                 DBMedicalDevice.id == base.c.item_id,
             ),
-            isouter=False,
         )
         .join(DBCategory, DBCategory.id == DBMedicalDevice.category_id, isouter=True)
     )
 
-    final_q = (
+    final = (
         select("*")
-        .select_from(union_all(meds, devs).subquery())
+        .select_from(union_all(meds, devs).subquery("u"))
         .where(literal_column("quantity") > 0)
         .order_by(literal_column("item_type"), literal_column("name"))
     )
 
-    rows = db.execute(
-        final_q,
-        {"branch_id": branch_id, "date_from": date_from, "date_to": date_to},
-    ).mappings().all()
+    rows = db.execute(final).mappings().all()
     return [
         {
             "type": r["item_type"],
