@@ -1,6 +1,6 @@
 import type { DispensingRow, IncomingRow } from '@/types';
 
-const API_BASE_URL = 'http://localhost:8000';
+export const API_BASE_URL = 'http://localhost:8000';
 
 interface LoginData {
   login: string;
@@ -538,7 +538,7 @@ class ApiService {
 
   async getDispensingReport(params: { branch_id: string; date_from: string; date_to: string }): Promise<{ data: DispensingRow[] }> {
     const q = new URLSearchParams(params as any).toString();
-    const res = await this.request<any>(`/reports/dispensing?${q}`);
+    const res = await this.request<any>(`/reports/dispensings?${q}`);
     if (res.error) return res as any;
     return { data: this.normalizeData(res) } as { data: DispensingRow[] };
   }
