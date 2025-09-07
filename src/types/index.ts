@@ -130,3 +130,13 @@ export interface DispensingRow {
     quantity: number;
   }>;
 }
+
+export interface IncomingRow {
+  id: string;
+  datetime: string;
+  items: Array<{
+    type: 'medicine' | 'medical_device';
+    name: string;
+    quantity: number;
+  }>;
+}

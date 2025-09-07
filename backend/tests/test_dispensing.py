@@ -9,7 +9,10 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
-os.environ["DATABASE_URL"] = "sqlite:///./test_dispense.db"
+DB_PATH = "./test_dispense.db"
+if os.path.exists(DB_PATH):
+    os.remove(DB_PATH)
+os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 
 from database import (
     create_tables,

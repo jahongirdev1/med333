@@ -1317,6 +1317,56 @@ async def get_dispensing_report(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/reports/incoming")
+async def get_incoming_report(
+    branch_id: str,
+    date_from: str,
+    date_to: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        start = datetime.fromisoformat(date_from).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        end = datetime.fromisoformat(date_to).replace(
+            hour=23, minute=59, second=59, microsecond=999999
+        )
+
+        shipments = (
+            db.query(DBShipment)
+            .filter(
+                DBShipment.to_branch_id == branch_id,
+                DBShipment.status == "accepted",
+                DBShipment.created_at >= start,
+                DBShipment.created_at <= end,
+            )
+            .all()
+        )
+
+        data = []
+        for s in shipments:
+            items = (
+                db.query(DBShipmentItem)
+                .filter(DBShipmentItem.shipment_id == s.id)
+                .all()
+            )
+            items_data = [
+                {"type": it.item_type, "name": it.item_name, "quantity": it.quantity}
+                for it in items
+            ]
+            data.append(
+                {
+                    "id": s.id,
+                    "datetime": s.created_at.isoformat(),
+                    "items": items_data,
+                }
+            )
+
+        return {"data": data}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/reports/stock")
 async def get_stock_report(
     branch_id: str,
