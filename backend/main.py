@@ -35,6 +35,43 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+ALMATY = ZoneInfo("Asia/Almaty")
+
+
+def to_almaty(dt: datetime | str | None) -> str:
+    if not dt:
+        return ""
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        except Exception:
+            return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone(ALMATY).strftime("%d.%m.%Y %H:%M")
+
+
+def humanize_items(raw) -> str:
+    data = raw
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return raw
+    if not isinstance(data, list):
+        return ""
+    parts = []
+    for it in data:
+        name = (
+            it.get("name")
+            or it.get("medicine_name")
+            or it.get("device_name")
+            or ""
+        )
+        qty = it.get("quantity") or 0
+        parts.append(f"{name} — {qty} шт.")
+    return "; ".join(parts)
+
 def ensure_schema_patches():
     with engine.begin() as conn:
         insp = inspect(conn)
@@ -1386,6 +1423,88 @@ async def get_incoming_report(
         return {"data": data}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/reports/dispensing/export")
+async def export_dispensing_report(
+    branch_id: str,
+    date_from: str,
+    date_to: str,
+    db: Session = Depends(get_db),
+):
+    if Workbook is None:
+        raise HTTPException(status_code=500, detail="openpyxl not installed")
+    payload = await get_dispensing_report(
+        branch_id=branch_id, date_from=date_from, date_to=date_to, db=db
+    )
+    records = payload.get("data", [])
+    rows = [
+        {
+            "Пациент": r.get("patient_name", ""),
+            "Сотрудник": r.get("employee_name", ""),
+            "Дата": to_almaty(r.get("created_at") or r.get("datetime")),
+            "Что выдано": humanize_items(
+                r.get("items")
+                or r.get("medicines")
+                or r.get("medical_devices")
+            ),
+        }
+        for r in records
+    ]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Выдачи"
+    headers = ["Пациент", "Сотрудник", "Дата", "Что выдано"]
+    ws.append(headers)
+    for row in rows:
+        ws.append([row[h] for h in headers])
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = "Отчет по выдачам.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.get("/reports/incoming/export")
+async def export_incoming_report(
+    branch_id: str,
+    date_from: str,
+    date_to: str,
+    db: Session = Depends(get_db),
+):
+    if Workbook is None:
+        raise HTTPException(status_code=500, detail="openpyxl not installed")
+    payload = await get_incoming_report(
+        branch_id=branch_id, date_from=date_from, date_to=date_to, db=db
+    )
+    records = payload.get("data", [])
+    rows = [
+        {
+            "Дата": to_almaty(r.get("created_at") or r.get("datetime")),
+            "Поступило": humanize_items(r.get("items")),
+        }
+        for r in records
+    ]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Поступления"
+    headers = ["Дата", "Поступило"]
+    ws.append(headers)
+    for row in rows:
+        ws.append([row[h] for h in headers])
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = "Отчет по поступлениям.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 def _parse_date(s: Optional[str]) -> Optional[datetime]:
