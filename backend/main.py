@@ -1548,178 +1548,53 @@ def get_stock_report(
     date_to: Optional[str] = Query(None, alias="date_to"),
     db: Session = Depends(get_db),
 ):
-    start = _parse_date(date_from)
-    end = _parse_date(date_to)
+    """Return current on-hand quantities for medicines and medical devices.
+
+    The date parameters are accepted for compatibility but are ignored –
+    the report always shows the latest balances for the given branch.
+    """
     try:
-        arrival_branch_col = pick_col(
-            DBArrival,
-            [
-                "to_branch_id",
-                "branch_id",
-                "to_branch",
-                "branch",
-                "destination_branch_id",
-                "dest_branch_id",
-            ],
-            lambda c: ("branch" in c.name.lower())
-            and c.name.lower().endswith(("id", "_id")),
+        query = text(
+            """
+            -- medicines
+            SELECT
+              m.id          AS item_id,
+              m.name        AS name,
+              c.name        AS category,
+              m.quantity    AS quantity,
+              'medicine'    AS item_type
+            FROM medicines m
+            LEFT JOIN categories c ON c.id = m.category_id
+            WHERE m.branch_id = :branch_id AND m.quantity > 0
+
+            UNION ALL
+
+            -- medical devices
+            SELECT
+              d.id          AS item_id,
+              d.name        AS name,
+              c.name        AS category,
+              d.quantity    AS quantity,
+              'medical_device' AS item_type
+            FROM medical_devices d
+            LEFT JOIN categories c ON c.id = d.category_id
+            WHERE d.branch_id = :branch_id AND d.quantity > 0
+
+            ORDER BY item_type, name
+            """
         )
-        arrival_dt_col = pick_col(
-            DBArrival,
-            ["created_at", "date", "created", "timestamp"],
-            lambda c: isinstance(c.type, (DateTime, Date)),
-        )
-        record_dt_col = pick_col(
-            DBDispensingRecord,
-            ["created_at", "date", "created", "timestamp"],
-            lambda c: isinstance(c.type, (DateTime, Date)),
-        )
-        try:
-            record_branch_col = DBDispensingRecord.branch_id
-        except AttributeError:
-            record_branch_col = pick_col(
-                DBDispensingRecord,
-                ["branch_id", "from_branch_id", "branch"],
-                lambda c: ("branch" in c.name.lower())
-                and c.name.lower().endswith(("id", "_id")),
-            )
-
-        arr_base = (
-            select(
-                DBArrival.item_type,
-                DBArrival.item_id,
-                func.coalesce(func.sum(DBArrival.quantity), 0).label("qty"),
-            )
-            .where(arrival_branch_col == branch_id)
-            .group_by(DBArrival.item_type, DBArrival.item_id)
-        )
-
-        out_base = (
-            select(
-                DBDispensingItem.item_type,
-                DBDispensingItem.item_id,
-                func.coalesce(func.sum(DBDispensingItem.quantity), 0).label("qty"),
-            )
-            .join(
-                DBDispensingRecord, DBDispensingRecord.id == DBDispensingItem.record_id
-            )
-            .where(record_branch_col == branch_id)
-            .group_by(DBDispensingItem.item_type, DBDispensingItem.item_id)
-        )
-
-        empty = (
-            select(literal_column("1"))
-            .where(literal_column("1") == literal_column("0"))
-            .subquery()
-        )
-
-        if start:
-            start_in = arr_base.where(arrival_dt_col < start).subquery()
-            start_out = out_base.where(record_dt_col < start).subquery()
-        else:
-            start_in = empty
-            start_out = empty
-
-        if start and end:
-            pin = (
-                arr_base.where(
-                    and_(arrival_dt_col >= start, arrival_dt_col <= end)
-                ).subquery()
-            )
-            pout = (
-                out_base.where(
-                    and_(record_dt_col >= start, record_dt_col <= end)
-                ).subquery()
-            )
-        else:
-            pin = arr_base.subquery()
-            pout = out_base.subquery()
-
-        sums = union_all(
-            select(start_in.c.item_type, start_in.c.item_id, start_in.c.qty),
-            select(start_out.c.item_type, start_out.c.item_id, -start_out.c.qty),
-            select(pin.c.item_type, pin.c.item_id, pin.c.qty),
-            select(pout.c.item_type, pout.c.item_id, -pout.c.qty),
-        ).subquery("sums")
-
-        base = (
-            select(
-                sums.c.item_type.label("item_type"),
-                sums.c.item_id.label("item_id"),
-                func.coalesce(func.sum(sums.c.qty), 0).label("quantity"),
-            )
-            .group_by(sums.c.item_type, sums.c.item_id)
-            .subquery("base")
-        )
-
-        meds = (
-            select(
-                base.c.item_type,
-                base.c.item_id,
-                base.c.quantity,
-                DBMedicine.name.label("name"),
-                DBCategory.name.label("category"),
-            )
-            .join(
-                DBMedicine,
-                and_(
-                    base.c.item_type == literal_column("'medicine'"),
-                    DBMedicine.id == base.c.item_id,
-                ),
-            )
-            .join(DBCategory, DBCategory.id == DBMedicine.category_id, isouter=True)
-        )
-
-        devs = (
-            select(
-                base.c.item_type,
-                base.c.item_id,
-                base.c.quantity,
-                DBMedicalDevice.name.label("name"),
-                DBCategory.name.label("category"),
-            )
-            .join(
-                DBMedicalDevice,
-                and_(
-                    base.c.item_type
-                    == literal_column("'medical_device'"),
-                    DBMedicalDevice.id == base.c.item_id,
-                ),
-            )
-            .join(
-                DBCategory, DBCategory.id == DBMedicalDevice.category_id, isouter=True
-            )
-        )
-
-        final = (
-            select("*")
-            .select_from(union_all(meds, devs).subquery("u"))
-            .where(literal_column("quantity") > 0)
-            .order_by(literal_column("item_type"), literal_column("name"))
-        )
-
-        rows = db.execute(final).mappings().all()
-
-        result = [
+        rows = db.execute(query, {"branch_id": branch_id}).mappings().all()
+        return [
             {
-                "type": r["item_type"],
-                "id": r["item_id"],
-                "Название": r.get("name") or "",
-                "Категория": r.get("category") or "",
-                "Количество": int(r["quantity"] or 0),
+                "item_type": r["item_type"],
+                "item_id": r["item_id"],
+                "name": r.get("name") or "",
+                "category": r.get("category") or "",
+                "quantity": int(r.get("quantity") or 0),
             }
             for r in rows
         ]
-        import logging
-
-        logger = logging.getLogger("uvicorn.error")
-        logger.info(
-            "Stock report: arrivals branch col=%s, date col=%s",
-            arrival_branch_col.key,
-            arrival_dt_col.key,
-        )
-        return {"data": result}
-    except RuntimeError as e:
+    except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -1732,19 +1607,25 @@ def export_stock_xlsx(
 ):
     if Workbook is None:
         raise HTTPException(status_code=500, detail="openpyxl not installed")
-    payload = get_stock_report(
+    records = get_stock_report(
         branch_id=branch_id, date_from=date_from, date_to=date_to, db=db
     )
-    rows = payload["data"]
+    rows = [
+        {
+            "Название": r["name"],
+            "Категория": r.get("category", ""),
+            "Количество": r["quantity"],
+        }
+        for r in records
+    ]
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Остатки"
-
-    headers = ["Название", "Категория", "Количество", "Тип"]
+    headers = ["Название", "Категория", "Количество"]
     ws.append(headers)
-    for r in rows:
-        ws.append([r["Название"], r["Категория"], r["Количество"], r["type"]])
+    for row in rows:
+        ws.append([row[h] for h in headers])
 
     buf = BytesIO()
     wb.save(buf)
