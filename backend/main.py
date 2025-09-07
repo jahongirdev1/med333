@@ -1,8 +1,16 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text
-from sqlalchemy import inspect
+from sqlalchemy import (
+    text,
+    inspect,
+    select,
+    func,
+    and_,
+    union_all,
+    literal_column,
+    case,
+)
 from database import get_db, create_tables, engine, User as DBUser, Branch as DBBranch, Medicine as DBMedicine, Employee as DBEmployee, Patient as DBPatient, Transfer as DBTransfer, DispensingRecord as DBDispensingRecord, DispensingItem as DBDispensingItem, Arrival as DBArrival, Category as DBCategory, MedicalDevice as DBMedicalDevice, Shipment as DBShipment, ShipmentItem as DBShipmentItem, Notification as DBNotification
 from schemas import *
 from typing import List, Optional
@@ -13,6 +21,9 @@ import json
 from pydantic import ValidationError
 from services.stock import get_available_qty, decrement_stock, ItemType
 import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 def ensure_schema_patches():
     with engine.begin() as conn:
@@ -1374,98 +1385,148 @@ async def get_stock_report(
     date_to: Optional[datetime] = Query(None),
     db: Session = Depends(get_db),
 ):
-    params = {"branch_id": branch_id}
+    def pick(model, *names):
+        for n in names:
+            col = getattr(model, n, None)
+            if col is not None:
+                return col
+        raise RuntimeError(f"{model.__name__}: none of columns {names} found")
+
+    arrival_branch = pick(DBArrival, "to_branch_id", "branch_id")
+    arrival_dt = pick(DBArrival, "created_at", "date")
+    record_dt = pick(DBDispensingRecord, "created_at", "date")
+    record_branch = DBDispensingRecord.branch_id
+
+    logger.info(
+        "Stock report uses arrivals.%s and arrivals.%s",
+        arrival_branch.key,
+        arrival_dt.key,
+    )
+
+    branch_id_param = literal_column(":branch_id")
+    date_from_param = literal_column(":date_from")
+    date_to_param = literal_column(":date_to")
+
+    arr_base = (
+        select(
+            DBArrival.item_type,
+            DBArrival.item_id,
+            func.coalesce(func.sum(DBArrival.quantity), 0).label("qty"),
+        )
+        .where(arrival_branch == branch_id_param)
+        .group_by(DBArrival.item_type, DBArrival.item_id)
+    )
+
+    out_base = (
+        select(
+            DBDispensingItem.item_type,
+            DBDispensingItem.item_id,
+            func.coalesce(func.sum(DBDispensingItem.quantity), 0).label("qty"),
+        )
+        .join(DBDispensingRecord, DBDispensingRecord.id == DBDispensingItem.record_id)
+        .where(record_branch == branch_id_param)
+        .group_by(DBDispensingItem.item_type, DBDispensingItem.item_id)
+    )
 
     if date_from:
-        params["start"] = date_from
-        start_in_sql = """
-            SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
-            FROM arrivals a
-            WHERE a.to_branch_id = :branch_id AND a.created_at < :start
-            GROUP BY item_type, item_id
-        """
-        start_out_sql = """
-            SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
-            FROM dispensing_items di
-            JOIN dispensing_records dr ON dr.id = di.record_id
-            WHERE dr.branch_id = :branch_id AND dr.created_at < :start
-            GROUP BY di.item_type, di.item_id
-        """
+        start_in = arr_base.where(arrival_dt < date_from_param).subquery()
+        start_out = out_base.where(record_dt < date_from_param).subquery()
     else:
-        start_in_sql = "SELECT item_type, item_id, 0::bigint AS qty WHERE FALSE"
-        start_out_sql = "SELECT item_type, item_id, 0::bigint AS qty WHERE FALSE"
+        start_in = (
+            select(literal_column("'medicine'"))
+            .where(literal_column("false"))
+            .subquery()
+        )
+        start_out = (
+            select(literal_column("'medicine'"))
+            .where(literal_column("false"))
+            .subquery()
+        )
 
     if date_from and date_to:
-        params["start"] = date_from
-        params["end"] = date_to
-        period_in_sql = """
-            SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
-            FROM arrivals a
-            WHERE a.to_branch_id = :branch_id
-              AND a.created_at >= :start AND a.created_at <= :end
-            GROUP BY item_type, item_id
-        """
-        period_out_sql = """
-            SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
-            FROM dispensing_items di
-            JOIN dispensing_records dr ON dr.id = di.record_id
-            WHERE dr.branch_id = :branch_id
-              AND dr.created_at >= :start AND dr.created_at <= :end
-            GROUP BY di.item_type, di.item_id
-        """
+        pin = (
+            arr_base.where(
+                and_(arrival_dt >= date_from_param, arrival_dt <= date_to_param)
+            ).subquery()
+        )
+        pout = (
+            out_base.where(
+                and_(record_dt >= date_from_param, record_dt <= date_to_param)
+            ).subquery()
+        )
     else:
-        period_in_sql = """
-            SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
-            FROM arrivals a
-            WHERE a.to_branch_id = :branch_id
-            GROUP BY item_type, item_id
-        """
-        period_out_sql = """
-            SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
-            FROM dispensing_items di
-            JOIN dispensing_records dr ON dr.id = di.record_id
-            WHERE dr.branch_id = :branch_id
-            GROUP BY di.item_type, di.item_id
-        """
+        pin = arr_base.subquery()
+        pout = out_base.subquery()
 
-    final_sql = f"""
-        WITH start_in AS ({start_in_sql}),
-             start_out AS ({start_out_sql}),
-             pin AS ({period_in_sql}),
-             pout AS ({period_out_sql}),
-             base AS (
-                 SELECT item_type, item_id,
-                        COALESCE(SUM(qty),0) AS quantity
-                 FROM (
-                     SELECT item_type, item_id, qty FROM start_in
-                     UNION ALL
-                     SELECT item_type, item_id, -qty FROM start_out
-                     UNION ALL
-                     SELECT item_type, item_id, qty FROM pin
-                     UNION ALL
-                     SELECT item_type, item_id, -qty FROM pout
-                 ) s
-                 GROUP BY item_type, item_id
-             )
-        SELECT b.item_type, b.item_id, b.quantity,
-               COALESCE(m.name, md.name) AS name,
-               COALESCE(mc.name, mdc.name) AS category
-        FROM base b
-        LEFT JOIN medicines m ON b.item_type = 'medicine' AND m.id = b.item_id
-        LEFT JOIN categories mc ON mc.id = m.category_id
-        LEFT JOIN medical_devices md ON b.item_type = 'medical_device' AND md.id = b.item_id
-        LEFT JOIN categories mdc ON mdc.id = md.category_id
-        WHERE b.quantity > 0
-        ORDER BY b.item_type, name
-    """
+    sums = union_all(
+        select(start_in.c.item_type, start_in.c.item_id, start_in.c.qty),
+        select(start_out.c.item_type, start_out.c.item_id, -start_out.c.qty),
+        select(pin.c.item_type, pin.c.item_id, pin.c.qty),
+        select(pout.c.item_type, pout.c.item_id, -pout.c.qty),
+    ).subquery()
 
-    rows = db.execute(text(final_sql), params).mappings().all()
+    base = (
+        select(
+            sums.c.item_type.label("item_type"),
+            sums.c.item_id.label("item_id"),
+            func.coalesce(func.sum(sums.c.qty), 0).label("quantity"),
+        )
+        .group_by(sums.c.item_type, sums.c.item_id)
+        .subquery()
+    )
+
+    meds = (
+        select(
+            base.c.item_type,
+            base.c.item_id,
+            base.c.quantity,
+            DBMedicine.name.label("name"),
+            DBCategory.name.label("category"),
+        )
+        .join(
+            DBMedicine,
+            and_(base.c.item_type == "medicine", DBMedicine.id == base.c.item_id),
+            isouter=False,
+        )
+        .join(DBCategory, DBCategory.id == DBMedicine.category_id, isouter=True)
+    )
+
+    devs = (
+        select(
+            base.c.item_type,
+            base.c.item_id,
+            base.c.quantity,
+            DBMedicalDevice.name.label("name"),
+            DBCategory.name.label("category"),
+        )
+        .join(
+            DBMedicalDevice,
+            and_(
+                base.c.item_type == "medical_device",
+                DBMedicalDevice.id == base.c.item_id,
+            ),
+            isouter=False,
+        )
+        .join(DBCategory, DBCategory.id == DBMedicalDevice.category_id, isouter=True)
+    )
+
+    final_q = (
+        select("*")
+        .select_from(union_all(meds, devs).subquery())
+        .where(literal_column("quantity") > 0)
+        .order_by(literal_column("item_type"), literal_column("name"))
+    )
+
+    rows = db.execute(
+        final_q,
+        {"branch_id": branch_id, "date_from": date_from, "date_to": date_to},
+    ).mappings().all()
     return [
         {
             "type": r["item_type"],
             "id": r["item_id"],
-            "name": r["name"] or "",
-            "category": r["category"] or "",
+            "name": r.get("name") or "",
+            "category": r.get("category") or "",
             "quantity": int(r["quantity"] or 0),
         }
         for r in rows
