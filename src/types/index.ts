@@ -118,3 +118,15 @@ export interface StockDetails {
   total_in: number;
   total_out: number;
 }
+
+export interface DispensingRow {
+  id: string;
+  patient_name: string;
+  employee_name: string;
+  datetime: string;
+  items: Array<{
+    type: 'medicine' | 'medical_device';
+    name: string;
+    quantity: number;
+  }>;
+}

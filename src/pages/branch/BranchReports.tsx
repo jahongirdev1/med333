@@ -51,7 +51,7 @@ const BranchReports: React.FC = () => {
           response = await apiService.getStockReport(params);
           break;
         case 'dispensing':
-          response = await apiService.getDispensings(branchId);
+          response = await apiService.getDispensingReport(params as any);
           break;
         case 'arrivals':
           response = await apiService.getArrivals();
@@ -143,6 +143,37 @@ const BranchReports: React.FC = () => {
                 <TableCell>{item.quantity}</TableCell>
                 <TableCell>
                   <Button variant="outline" size="sm" onClick={() => showItemDetails(item)}>
+                    Подробнее
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      );
+    }
+
+    if (selectedReportType === 'dispensing') {
+      return (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Пациент</TableHead>
+              <TableHead>Сотрудник</TableHead>
+              <TableHead>Дата</TableHead>
+              <TableHead>Действия</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {reportData.map((row: any) => (
+              <TableRow key={row.id}>
+                <TableCell>{row.patient_name}</TableCell>
+                <TableCell>{row.employee_name}</TableCell>
+                <TableCell>
+                  {new Date(row.datetime).toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}
+                </TableCell>
+                <TableCell>
+                  <Button variant="outline" size="sm" onClick={() => showItemDetails(row)}>
                     Подробнее
                   </Button>
                 </TableCell>
@@ -279,7 +310,9 @@ const BranchReports: React.FC = () => {
           <CardContent className="text-center py-8">
             <FileText className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
             <p className="text-muted-foreground">
-              Нет данных для отображения. Попробуйте изменить параметры отчета.
+              {selectedReportType === 'dispensing'
+                ? 'Нет данных за выбранный период.'
+                : 'Нет данных для отображения. Попробуйте изменить параметры отчета.'}
             </p>
           </CardContent>
         </Card>
@@ -288,7 +321,13 @@ const BranchReports: React.FC = () => {
       <Dialog open={showDetails} onOpenChange={setShowDetails}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Детали по остатку</DialogTitle>
+            <DialogTitle>
+              {selectedReportType === 'stock'
+                ? 'Детали по остатку'
+                : selectedReportType === 'dispensing'
+                  ? 'Состав выдачи'
+                  : 'Детали'}
+            </DialogTitle>
           </DialogHeader>
           {selectedReportType === 'stock' && stockDetails ? (
             stockDetails.incoming.length === 0 && stockDetails.outgoing.length === 0 ? (
@@ -338,6 +377,29 @@ const BranchReports: React.FC = () => {
                   <div>Итого выдано: {stockDetails.total_out}</div>
                 </div>
               </div>
+            )
+          ) : selectedReportType === 'dispensing' && selectedItem ? (
+            selectedItem.items && selectedItem.items.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Тип</TableHead>
+                    <TableHead>Наименование</TableHead>
+                    <TableHead>Количество</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {selectedItem.items.map((it: any, idx: number) => (
+                    <TableRow key={idx}>
+                      <TableCell>{it.type === 'medicine' ? 'Лекарство' : 'ИМН'}</TableCell>
+                      <TableCell>{it.name}</TableCell>
+                      <TableCell>{it.quantity}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="text-center py-4">Нет данных за выбранный период.</p>
             )
           ) : (
             selectedItem && (

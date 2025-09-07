@@ -1266,6 +1266,57 @@ async def generate_report(request: ReportRequest, db: Session = Depends(get_db))
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/reports/dispensing")
+async def get_dispensing_report(
+    branch_id: str,
+    date_from: str,
+    date_to: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        start = datetime.fromisoformat(date_from).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        end = datetime.fromisoformat(date_to).replace(
+            hour=23, minute=59, second=59, microsecond=999999
+        )
+
+        records = (
+            db.query(DBDispensingRecord)
+            .options(joinedload(DBDispensingRecord.items))
+            .filter(
+                DBDispensingRecord.branch_id == branch_id,
+                DBDispensingRecord.date >= start,
+                DBDispensingRecord.date <= end,
+            )
+            .all()
+        )
+
+        data = []
+        for r in records:
+            items = [
+                {
+                    "type": i.item_type,
+                    "name": i.item_name,
+                    "quantity": i.quantity,
+                }
+                for i in r.items
+            ]
+            data.append(
+                {
+                    "id": r.id,
+                    "patient_name": r.patient_name,
+                    "employee_name": r.employee_name,
+                    "datetime": r.date.isoformat(),
+                    "items": items,
+                }
+            )
+
+        return {"data": data}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/reports/stock")
 async def get_stock_report(
     branch_id: str,
