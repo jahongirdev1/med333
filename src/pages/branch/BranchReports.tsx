@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { apiService } from '@/utils/api';
+import { apiService, API_BASE_URL } from '@/utils/api';
 import { storage } from '@/utils/storage';
 import { Calendar, Download, FileText, Package, Users, TrendingUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -81,6 +81,18 @@ const BranchReports: React.FC = () => {
   };
 
   const exportToExcel = () => {
+    if (selectedReportType === 'dispensing') {
+      const params = new URLSearchParams({
+        branch_id: branchId!,
+        date_from: dateFrom,
+        date_to: dateTo,
+        export: 'excel',
+      });
+      const url = `/reports/dispensings?${params.toString()}`;
+      window.open(`${API_BASE_URL}${url}`, '_blank');
+      return;
+    }
+
     if (reportData.length === 0) {
       toast({ title: 'Нет данных для экспорта', variant: 'destructive' });
       return;
@@ -102,10 +114,10 @@ const BranchReports: React.FC = () => {
     }
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Report');
-    
+
     const fileName = `${reportType?.label || 'Отчет'}_${new Date().toISOString().split('T')[0]}.xlsx`;
     XLSX.writeFile(workbook, fileName);
-    
+
     toast({ title: 'Отчет экспортирован в Excel' });
   };
 

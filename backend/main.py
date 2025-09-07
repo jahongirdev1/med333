@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Query
+from fastapi import FastAPI, Depends, HTTPException, status, Query, Response
 from starlette.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
@@ -37,7 +37,7 @@ from database import (
 )
 from schemas import *
 from typing import List, Optional, Iterable, Callable
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone, time
 from zoneinfo import ZoneInfo
 import uuid
 import json
@@ -49,8 +49,10 @@ import re
 from io import BytesIO
 try:
     from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
 except ImportError:  # pragma: no cover
     Workbook = None
+    get_column_letter = None
 
 logger = logging.getLogger(__name__)
 
@@ -1524,6 +1526,129 @@ async def export_incoming_report(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+@app.get("/reports/dispensings")
+def get_dispensings_report(
+    branch_id: str,
+    date_from: date,
+    date_to: date,
+    export: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    DI = DBDispensingItem
+    DR = DBDispensingRecord
+    M = DBMedicine
+    MD = DBMedicalDevice
+
+    rows = (
+        db.query(
+            DR.id.label("record_id"),
+            DR.patient_name,
+            DR.employee_name,
+            DR.date.label("created_at"),
+            DI.item_type,
+            DI.item_id,
+            DI.quantity,
+            case((DI.item_type == "medicine", M.name), else_=MD.name).label(
+                "item_name"
+            ),
+        )
+        .select_from(DR)
+        .join(DI, DI.record_id == DR.id)
+        .outerjoin(M, and_(DI.item_type == "medicine", M.id == DI.item_id))
+        .outerjoin(
+            MD,
+            and_(DI.item_type == "medical_device", MD.id == DI.item_id),
+        )
+        .filter(DR.branch_id == branch_id)
+        .filter(DR.date >= datetime.combine(date_from, time.min))
+        .filter(DR.date <= datetime.combine(date_to, time.max))
+        .order_by(DR.date.asc())
+        .all()
+    )
+
+    by_record: dict[str, dict] = {}
+    for r in rows:
+        rec = by_record.setdefault(
+            r.record_id,
+            {
+                "patient": r.patient_name or "",
+                "employee": r.employee_name or "",
+                "created_at": r.created_at,
+                "items_details": [],
+                "item_titles": [],
+            },
+        )
+        item = {
+            "type": r.item_type,
+            "name": r.item_name or "",
+            "quantity": int(r.quantity),
+        }
+        rec["items_details"].append(item)
+        rec["item_titles"].append(f"{item['name']} — {item['quantity']} шт")
+
+    json_rows = []
+    excel_rows = []
+    for rec_id, rec in by_record.items():
+        dt = rec["created_at"]
+        if dt and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        if dt:
+            dt_local = dt.astimezone(ALMATY)
+            dt_iso = dt.isoformat()
+        else:
+            dt_local = None
+            dt_iso = ""
+
+        json_rows.append(
+            {
+                "id": rec_id,
+                "patient_name": rec["patient"],
+                "employee_name": rec["employee"],
+                "datetime": dt_iso,
+                "items": rec["items_details"],
+            }
+        )
+
+        excel_rows.append(
+            {
+                "Пациент": rec["patient"],
+                "Сотрудник": rec["employee"],
+                "Дата (Алматы)": dt_local.strftime("%Y-%m-%d %H:%M:%S")
+                if dt_local
+                else "",
+                "Выданные позиции": "; ".join(rec["item_titles"]),
+            }
+        )
+
+    if export == "excel":
+        if Workbook is None:
+            raise HTTPException(status_code=500, detail="openpyxl not installed")
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Отчет по выдачам"
+        headers = ["Пациент", "Сотрудник", "Дата (Алматы)", "Выданные позиции"]
+        ws.append(headers)
+        for row in excel_rows:
+            ws.append([row[h] for h in headers])
+
+        for col_idx in range(1, len(headers) + 1):
+            col = get_column_letter(col_idx)
+            max_len = max((len(str(c.value)) if c.value else 0 for c in ws[col]), default=10)
+            ws.column_dimensions[col].width = min(max_len + 2, 60)
+
+        bio = BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+        filename = f"Отчет по выдачам_{date_to.isoformat()}.xlsx"
+        return Response(
+            content=bio.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    return {"data": json_rows}
 
 
 def _parse_date(s: Optional[str]) -> Optional[datetime]:
