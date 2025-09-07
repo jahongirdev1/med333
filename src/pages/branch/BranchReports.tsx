@@ -54,7 +54,7 @@ const BranchReports: React.FC = () => {
           response = await apiService.getDispensingReport(params as any);
           break;
         case 'arrivals':
-          response = await apiService.getArrivals();
+          response = await apiService.getIncomingReport(params as any);
           break;
         default:
           throw new Error('Unknown report type');
@@ -172,6 +172,38 @@ const BranchReports: React.FC = () => {
                 <TableCell>
                   {new Date(row.datetime).toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}
                 </TableCell>
+                <TableCell>
+                  <Button variant="outline" size="sm" onClick={() => showItemDetails(row)}>
+                    Подробнее
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      );
+    }
+
+    if (selectedReportType === 'arrivals') {
+      const summarize = (items: any[]) => {
+        const parts = items.map((i: any) => `${i.name} — ${i.quantity} шт.`);
+        const res = parts.slice(0, 3).join('; ');
+        return parts.length > 3 ? `${res}; …` : res;
+        };
+      return (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Дата</TableHead>
+              <TableHead>Состав поступления</TableHead>
+              <TableHead>Действия</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {reportData.map((row: any) => (
+              <TableRow key={row.id}>
+                <TableCell>{new Date(row.datetime).toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}</TableCell>
+                <TableCell>{summarize(row.items)}</TableCell>
                 <TableCell>
                   <Button variant="outline" size="sm" onClick={() => showItemDetails(row)}>
                     Подробнее
@@ -310,7 +342,7 @@ const BranchReports: React.FC = () => {
           <CardContent className="text-center py-8">
             <FileText className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
             <p className="text-muted-foreground">
-              {selectedReportType === 'dispensing'
+              {selectedReportType === 'dispensing' || selectedReportType === 'arrivals'
                 ? 'Нет данных за выбранный период.'
                 : 'Нет данных для отображения. Попробуйте изменить параметры отчета.'}
             </p>
@@ -326,7 +358,9 @@ const BranchReports: React.FC = () => {
                 ? 'Детали по остатку'
                 : selectedReportType === 'dispensing'
                   ? 'Состав выдачи'
-                  : 'Детали'}
+                  : selectedReportType === 'arrivals'
+                    ? 'Состав поступления'
+                    : 'Детали'}
             </DialogTitle>
           </DialogHeader>
           {selectedReportType === 'stock' && stockDetails ? (
@@ -378,7 +412,7 @@ const BranchReports: React.FC = () => {
                 </div>
               </div>
             )
-          ) : selectedReportType === 'dispensing' && selectedItem ? (
+          ) : (selectedReportType === 'dispensing' || selectedReportType === 'arrivals') && selectedItem ? (
             selectedItem.items && selectedItem.items.length > 0 ? (
               <Table>
                 <TableHeader>

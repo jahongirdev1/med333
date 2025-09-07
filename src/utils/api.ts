@@ -1,4 +1,4 @@
-import type { DispensingRow } from '@/types';
+import type { DispensingRow, IncomingRow } from '@/types';
 
 const API_BASE_URL = 'http://localhost:8000';
 
@@ -541,6 +541,13 @@ class ApiService {
     const res = await this.request<any>(`/reports/dispensing?${q}`);
     if (res.error) return res as any;
     return { data: this.normalizeData(res) } as { data: DispensingRow[] };
+  }
+
+  async getIncomingReport(params: { branch_id: string; date_from: string; date_to: string }): Promise<{ data: IncomingRow[] }> {
+    const q = new URLSearchParams(params as any).toString();
+    const res = await this.request<any>(`/reports/incoming?${q}`);
+    if (res.error) return res as any;
+    return { data: this.normalizeData(res) } as { data: IncomingRow[] };
   }
 
   async getStockReport(params: { branch_id: string; date_from?: string; date_to?: string }) {
