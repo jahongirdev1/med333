@@ -15,7 +15,26 @@ from sqlalchemy import (
     Date,
 )
 from sqlalchemy.sql.schema import Column
-from database import get_db, create_tables, engine, User as DBUser, Branch as DBBranch, Medicine as DBMedicine, Employee as DBEmployee, Patient as DBPatient, Transfer as DBTransfer, DispensingRecord as DBDispensingRecord, DispensingItem as DBDispensingItem, Arrival as DBArrival, Category as DBCategory, MedicalDevice as DBMedicalDevice, Shipment as DBShipment, ShipmentItem as DBShipmentItem, Notification as DBNotification
+from database import (
+    get_db,
+    create_tables,
+    engine,
+    SessionLocal,
+    User as DBUser,
+    Branch as DBBranch,
+    Medicine as DBMedicine,
+    Employee as DBEmployee,
+    Patient as DBPatient,
+    Transfer as DBTransfer,
+    DispensingRecord as DBDispensingRecord,
+    DispensingItem as DBDispensingItem,
+    Arrival as DBArrival,
+    Category as DBCategory,
+    MedicalDevice as DBMedicalDevice,
+    Shipment as DBShipment,
+    ShipmentItem as DBShipmentItem,
+    Notification as DBNotification,
+)
 from schemas import *
 from typing import List, Optional, Iterable, Callable
 from datetime import datetime, date, timedelta, timezone
@@ -1520,82 +1539,125 @@ def _parse_date(s: Optional[str]) -> Optional[datetime]:
     raise HTTPException(status_code=400, detail=f"Bad date format: {s}")
 
 
-def pick_col(
-    model,
-    preferred_names: Iterable[str],
-    fallback: Optional[Callable[[Column], bool]] = None,
-) -> Column:
-    for name in preferred_names:
-        col = getattr(model, name, None)
-        if isinstance(col, Column) or (
-            hasattr(col, "expression") and hasattr(col, "key")
-        ):
-            return col
-    for c in model.__table__.c:
-        if fallback and fallback(c):
-            return c
-    pname = "|".join([re.escape(n) for n in preferred_names])
-    cols = ", ".join([c.name for c in model.__table__.c])
-    raise RuntimeError(
-        f"{model.__name__}: none of [{pname}] found. Available columns: {cols}"
-    )
+def pick_col(model, *names, fallback=None):
+    """Return the first existing column name from names for SQL use."""
+    cols = {str(c.name) for c in model.__table__.columns}
+    for n in names:
+        if n in cols:
+            return n
+    return fallback
 
 
 @app.get("/reports/stock")
 def get_stock_report(
-    branch_id: str = Query(..., alias="branch_id"),
-    date_from: Optional[str] = Query(None, alias="date_from"),
-    date_to: Optional[str] = Query(None, alias="date_to"),
-    db: Session = Depends(get_db),
+    branch_id: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ):
-    """Return current on-hand quantities for medicines and medical devices.
+    # parse dates if provided
+    start = None
+    end = None
+    if date_from and date_to:
+        from datetime import datetime
 
-    The date parameters are accepted for compatibility but are ignored –
-    the report always shows the latest balances for the given branch.
-    """
-    try:
-        query = text(
+        start = datetime.fromisoformat(date_from)
+        end = datetime.fromisoformat(date_to)
+
+    with SessionLocal() as db:
+        # === PATH A: no date range => current on-hand ===
+        if not (start and end):
+            sql = """
+                SELECT 'medicine' AS item_type, m.id AS item_id, m.name AS name,
+                       COALESCE(c.name, '—') AS category, m.quantity AS quantity
+                FROM medicines m
+                LEFT JOIN categories c ON c.id = m.category_id
+                WHERE m.branch_id = :b AND m.quantity > 0
+                UNION ALL
+                SELECT 'medical_device' AS item_type, d.id AS item_id, d.name AS name,
+                       COALESCE(c.name, '—') AS category, d.quantity AS quantity
+                FROM medical_devices d
+                LEFT JOIN categories c ON c.id = d.category_id
+                WHERE d.branch_id = :b AND d.quantity > 0
+                ORDER BY item_type, name
             """
-            -- medicines
-            SELECT
-              m.id          AS item_id,
-              m.name        AS name,
-              c.name        AS category,
-              m.quantity    AS quantity,
-              'medicine'    AS item_type
-            FROM medicines m
-            LEFT JOIN categories c ON c.id = m.category_id
-            WHERE m.branch_id = :branch_id AND m.quantity > 0
+            rows = db.execute(text(sql), {"b": branch_id}).mappings().all()
+            return {"data": rows}
 
-            UNION ALL
-
-            -- medical devices
-            SELECT
-              d.id          AS item_id,
-              d.name        AS name,
-              c.name        AS category,
-              d.quantity    AS quantity,
-              'medical_device' AS item_type
-            FROM medical_devices d
-            LEFT JOIN categories c ON c.id = d.category_id
-            WHERE d.branch_id = :branch_id AND d.quantity > 0
-
-            ORDER BY item_type, name
+        # === PATH B: date range present => closing balance as of `end` ===
+        arrival_branch_col = pick_col(DBArrival, "to_branch_id", "branch_id", "branch")
+        if not arrival_branch_col:
+            sql_fallback = """
+                SELECT 'medicine' AS item_type, m.id AS item_id, m.name AS name,
+                       COALESCE(c.name, '—') AS category, m.quantity AS quantity
+                FROM medicines m
+                LEFT JOIN categories c ON c.id = m.category_id
+                WHERE m.branch_id = :b AND m.quantity > 0
+                UNION ALL
+                SELECT 'medical_device' AS item_type, d.id AS item_id, d.name AS name,
+                       COALESCE(c.name, '—') AS category, d.quantity AS quantity
+                FROM medical_devices d
+                LEFT JOIN categories c ON c.id = d.category_id
+                WHERE d.branch_id = :b AND d.quantity > 0
+                ORDER BY item_type, name
             """
-        )
-        rows = db.execute(query, {"branch_id": branch_id}).mappings().all()
-        return [
-            {
-                "item_type": r["item_type"],
-                "item_id": r["item_id"],
-                "name": r.get("name") or "",
-                "category": r.get("category") or "",
-                "quantity": int(r.get("quantity") or 0),
-            }
-            for r in rows
-        ]
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+            rows = db.execute(text(sql_fallback), {"b": branch_id}).mappings().all()
+            return {"data": rows}
+
+        sql_dated = f"""
+            WITH start_in AS (
+                SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
+                FROM arrivals
+                WHERE {arrival_branch_col} = :b AND date < :start
+                GROUP BY item_type, item_id
+            ),
+            start_out AS (
+                SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
+                FROM dispensing_items di
+                JOIN dispensing_records dr ON dr.id = di.record_id
+                WHERE dr.branch_id = :b AND dr.date < :start
+                GROUP BY di.item_type, di.item_id
+            ),
+            pin AS (
+                SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
+                FROM arrivals
+                WHERE {arrival_branch_col} = :b AND date >= :start AND date <= :end
+                GROUP BY item_type, item_id
+            ),
+            pout AS (
+                SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
+                FROM dispensing_items di
+                JOIN dispensing_records dr ON dr.id = di.record_id
+                WHERE dr.branch_id = :b AND dr.date >= :start AND dr.date <= :end
+                GROUP BY di.item_type, di.item_id
+            ),
+            base AS (
+                SELECT item_type, item_id, COALESCE(SUM(qty),0) AS quantity
+                FROM (
+                    SELECT item_type, item_id, qty FROM start_in
+                    UNION ALL
+                    SELECT item_type, item_id, -qty FROM start_out
+                    UNION ALL
+                    SELECT item_type, item_id, qty FROM pin
+                    UNION ALL
+                    SELECT item_type, item_id, -qty FROM pout
+                ) s
+                GROUP BY item_type, item_id
+            )
+            SELECT b.item_type, b.item_id, b.quantity,
+                   COALESCE(m.name, d.name) AS name,
+                   COALESCE(mc.name, dc.name, '—') AS category
+            FROM base b
+            LEFT JOIN medicines m ON (b.item_type = 'medicine' AND m.id = b.item_id)
+            LEFT JOIN categories mc ON mc.id = m.category_id
+            LEFT JOIN medical_devices d ON (b.item_type = 'medical_device' AND d.id = b.item_id)
+            LEFT JOIN categories dc ON dc.id = d.category_id
+            WHERE b.quantity > 0
+            ORDER BY b.item_type, name
+        """
+        rows = db.execute(
+            text(sql_dated), {"b": branch_id, "start": start, "end": end}
+        ).mappings().all()
+        return {"data": rows}
 
 
 @app.get("/reports/stock/export")
@@ -1603,13 +1665,13 @@ def export_stock_xlsx(
     branch_id: str = Query(...),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
 ):
     if Workbook is None:
         raise HTTPException(status_code=500, detail="openpyxl not installed")
-    records = get_stock_report(
-        branch_id=branch_id, date_from=date_from, date_to=date_to, db=db
+    payload = get_stock_report(
+        branch_id=branch_id, date_from=date_from, date_to=date_to
     )
+    records = payload.get("data", [])
     rows = [
         {
             "Название": r["name"],

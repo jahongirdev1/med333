@@ -105,10 +105,10 @@ export interface DispensingRecord {
 }
 
 export interface StockRow {
-  type: 'medicine' | 'medical_device';
-  id: string;
+  item_type: 'medicine' | 'medical_device';
+  item_id: string;
   name: string;
-  category_name: string;
+  category: string;
   quantity: number;
 }
 
