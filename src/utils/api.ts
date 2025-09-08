@@ -368,6 +368,69 @@ class ApiService {
     return this.request<any>(`/reports/${reportType}/${itemId}`);
   }
 
+  // Warehouse reports
+  async getWarehouseStock(params: { dateFrom?: string; dateTo?: string }) {
+    const qs = new URLSearchParams();
+    if (params.dateFrom) qs.set('date_from', params.dateFrom);
+    if (params.dateTo) qs.set('date_to', params.dateTo);
+    const res = await this.request<any>(`/admin/warehouse/reports/stock?${qs.toString()}`);
+    return res.data?.data ?? [];
+  }
+
+  async getWarehouseArrivals(params: { dateFrom?: string; dateTo?: string }) {
+    const qs = new URLSearchParams();
+    if (params.dateFrom) qs.set('date_from', params.dateFrom);
+    if (params.dateTo) qs.set('date_to', params.dateTo);
+    const res = await this.request<any>(`/admin/warehouse/reports/arrivals?${qs.toString()}`);
+    return res.data?.data ?? [];
+  }
+
+  async exportWarehouseStockXlsx(params: { dateFrom?: string; dateTo?: string }) {
+    const qs = new URLSearchParams();
+    if (params.dateFrom) qs.set('date_from', params.dateFrom);
+    if (params.dateTo) qs.set('date_to', params.dateTo);
+    qs.set('export', 'excel');
+    const response = await fetch(`${API_BASE_URL}/admin/warehouse/reports/stock?${qs.toString()}`);
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition');
+    let fileName = 'report.xlsx';
+    if (disposition) {
+      const match = /filename="?([^";]+)"?/i.exec(disposition);
+      if (match && match[1]) fileName = match[1];
+    }
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  async exportWarehouseArrivalsXlsx(params: { dateFrom?: string; dateTo?: string }) {
+    const qs = new URLSearchParams();
+    if (params.dateFrom) qs.set('date_from', params.dateFrom);
+    if (params.dateTo) qs.set('date_to', params.dateTo);
+    qs.set('export', 'excel');
+    const response = await fetch(`${API_BASE_URL}/admin/warehouse/reports/arrivals?${qs.toString()}`);
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition');
+    let fileName = 'report.xlsx';
+    if (disposition) {
+      const match = /filename="?([^";]+)"?/i.exec(disposition);
+      if (match && match[1]) fileName = match[1];
+    }
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
   // Categories (updated with type parameter)
   async getCategoriesByType(type?: string) {
     let url = '/categories';
