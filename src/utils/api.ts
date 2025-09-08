@@ -56,6 +56,14 @@ class ApiService {
     return res as T;
   }
 
+  private normalizeArray<T = any>(res: any): T[] {
+    // Accept { data: [...] } OR [...] OR fallback to []
+    if (Array.isArray(res?.data?.data)) return res.data.data as T[];
+    if (Array.isArray(res?.data)) return res.data as T[];
+    if (Array.isArray(res)) return res as T[];
+    return [];
+  }
+
   private async requestWithFallback<T = any>(paths: string[]): Promise<{ data?: T; error?: string }> {
     let lastErr: string | undefined;
     for (const p of paths) {
@@ -392,22 +400,24 @@ class ApiService {
     const qs = new URLSearchParams();
     if (params.date_from) qs.set('date_from', params.date_from);
     if (params.date_to) qs.set('date_to', params.date_to);
-    return this.request<any>(`/admin/warehouse/reports/stock?${qs.toString()}`);
+    const res = await this.request<any>(`/admin/warehouse/reports/stock?${qs.toString()}`);
+    return { data: this.normalizeArray(res) };
   }
 
-  async getWarehouseArrivals(params: { dateFrom?: string; dateTo?: string }) {
+  async getWarehouseArrivals(params: { date_from?: string; date_to?: string }) {
     const qs = new URLSearchParams();
-    if (params.dateFrom) qs.set('date_from', params.dateFrom);
-    if (params.dateTo) qs.set('date_to', params.dateTo);
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
     const res = await this.request<any>(`/admin/warehouse/reports/arrivals?${qs.toString()}`);
-    return res.data?.data ?? [];
+    return { data: this.normalizeArray(res) };
   }
 
   async getWarehouseDispatches(params: { date_from?: string; date_to?: string }) {
     const qs = new URLSearchParams();
     if (params.date_from) qs.set('date_from', params.date_from);
     if (params.date_to) qs.set('date_to', params.date_to);
-    return this.request<{ data: any[] }>(`/admin/warehouse/reports/dispatches?${qs.toString()}`);
+    const res = await this.request<any>(`/admin/warehouse/reports/dispatches?${qs.toString()}`);
+    return { data: this.normalizeArray(res) };
   }
 
   async exportWarehouseStockXlsx(params: { date_from?: string; date_to?: string }) {
@@ -426,10 +436,10 @@ class ApiService {
     a.remove();
   }
 
-  async exportWarehouseArrivalsXlsx(params: { dateFrom?: string; dateTo?: string }) {
+  async exportWarehouseArrivalsXlsx(params: { date_from?: string; date_to?: string }) {
     const qs = new URLSearchParams();
-    if (params.dateFrom) qs.set('date_from', params.dateFrom);
-    if (params.dateTo) qs.set('date_to', params.dateTo);
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
     qs.set('export', 'excel');
     const response = await fetch(`${API_BASE_URL}/admin/warehouse/reports/arrivals?${qs.toString()}`);
     const blob = await response.blob();

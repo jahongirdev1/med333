@@ -29,33 +29,35 @@ function ReportsWarehouse() {
     setDetailsRow(null);
   }, [type]);
 
-  async function generateReport() {
+  const safeRows = Array.isArray(rows) ? rows : [];
+
+  async function generateReport(e?: React.MouseEvent | React.FormEvent) {
+    if (e) { e.preventDefault?.(); (e as any).stopPropagation?.(); }
+
     setLoading(true);
     try {
       if (type === 'arrivals') {
-        const data = await apiService.getWarehouseArrivals({ dateFrom, dateTo });
-        setRows(data ?? []);
-        return;
-      }
-      if (type === 'stock') {
-        const { data } = await apiService.getWarehouseStock({ date_from: dateFrom, date_to: dateTo });
-        setRows(data ?? []);
-        return;
-      }
-      if (type === 'dispatches') {
-        const { data } = await apiService.getWarehouseDispatches({ date_from: dateFrom, date_to: dateTo });
-        setRows(data ?? []);
-        return;
+        const res = await apiService.getWarehouseArrivals({ date_from: dateFrom, date_to: dateTo });
+        setRows(res.data ?? []);
+      } else if (type === 'stock') {
+        const res = await apiService.getWarehouseStock({ date_from: dateFrom, date_to: dateTo });
+        setRows(res.data ?? []);
+      } else if (type === 'dispatches') {
+        const res = await apiService.getWarehouseDispatches({ date_from: dateFrom, date_to: dateTo });
+        setRows(res.data ?? []);
       }
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleExport() {
-    if (type === 'arrivals') return apiService.exportWarehouseArrivalsXlsx({ dateFrom, dateTo });
-    if (type === 'stock') return apiService.exportWarehouseStockXlsx({ date_from: dateFrom, date_to: dateTo });
-    if (type === 'dispatches') return apiService.exportWarehouseDispatchesXlsx({ date_from: dateFrom, date_to: dateTo });
+  async function handleExport(e?: React.MouseEvent) {
+    if (e) { e.preventDefault?.(); e.stopPropagation?.(); }
+    if (!safeRows.length) return;
+
+    if (type === 'arrivals')    return apiService.exportWarehouseArrivalsXlsx({ date_from: dateFrom, date_to: dateTo });
+    if (type === 'stock')       return apiService.exportWarehouseStockXlsx({ date_from: dateFrom, date_to: dateTo });
+    if (type === 'dispatches')  return apiService.exportWarehouseDispatchesXlsx({ date_from: dateFrom, date_to: dateTo });
   }
 
   return (
@@ -89,68 +91,54 @@ function ReportsWarehouse() {
             <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
           <div className="flex items-end">
-            <Button onClick={generateReport} disabled={loading}>
+            <Button type="button" onClick={generateReport} disabled={loading}>
               Сгенерировать отчёт
             </Button>
           </div>
         </div>
 
-        {type === 'stock' && rows.length > 0 && (
-          <>
-            <table className="w-full">
-              <thead>
-                <tr>
-                  <th className="text-left py-2">Название</th>
-                  <th className="text-left py-2">Категория</th>
-                  <th className="text-left py-2">Количество</th>
+        {type === 'stock' && safeRows.length > 0 && (
+          <table className="w-full">
+            <thead>
+              <tr>
+                <th className="text-left py-2">Название</th>
+                <th className="text-left py-2">Категория</th>
+                <th className="text-left py-2">Количество</th>
+              </tr>
+            </thead>
+            <tbody>
+              {safeRows.map((r, idx) => (
+                <tr key={idx}>
+                  <td className="py-2">{r.name}</td>
+                  <td className="py-2">{r.category}</td>
+                  <td className="py-2">{r.quantity}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, idx) => (
-                  <tr key={idx}>
-                    <td className="py-2">{r.name}</td>
-                    <td className="py-2">{r.category}</td>
-                    <td className="py-2">{r.quantity}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="mt-6">
-              <Button variant="outline" onClick={handleExport} disabled={!rows.length || loading}>
-                Экспорт в Excel
-              </Button>
-            </div>
-          </>
+              ))}
+            </tbody>
+          </table>
         )}
 
-        {type === 'arrivals' && rows.length > 0 && (
-          <>
-            <table className="w-full">
-              <thead>
-                <tr>
-                  <th className="text-left py-2">Дата и время</th>
-                  <th className="text-left py-2">Поступило</th>
+        {type === 'arrivals' && safeRows.length > 0 && (
+          <table className="w-full">
+            <thead>
+              <tr>
+                <th className="text-left py-2">Дата и время</th>
+                <th className="text-left py-2">Поступило</th>
+              </tr>
+            </thead>
+            <tbody>
+              {safeRows.map((r, idx) => (
+                <tr key={idx}>
+                  <td className="py-2">{formatDateTimeAlmaty(r.datetime || r.date || r.created_at)}</td>
+                  <td className="py-2">
+                    {(r.items || [])
+                      .map((i: any) => `${i.name ?? '—'} — ${i.quantity ?? i.qty}`)
+                      .join(', ')}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, idx) => (
-                  <tr key={idx}>
-                    <td className="py-2">{formatDateTimeAlmaty(r.datetime || r.date || r.created_at)}</td>
-                    <td className="py-2">
-                      {(r.items || [])
-                        .map((i: any) => `${i.name ?? '—'} — ${i.quantity ?? i.qty}`)
-                        .join(', ')}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="mt-6">
-              <Button variant="outline" onClick={handleExport} disabled={!rows.length || loading}>
-                Экспорт в Excel
-              </Button>
-            </div>
-          </>
+              ))}
+            </tbody>
+          </table>
         )}
 
         {type === 'dispatches' && (
@@ -164,14 +152,14 @@ function ReportsWarehouse() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {safeRows.map((r) => (
                   <tr key={r.id}>
-                    <td className="py-2">{formatDateTimeAlmaty(r.datetime)}</td>
+                    <td className="py-2">{formatDateTimeAlmaty?.(r.datetime) ?? r.datetime}</td>
                     <td className="py-2">
                       {(r.items || []).map((i: any) => `${i.name} — ${i.quantity}`).join('; ')}
                     </td>
                     <td className="py-2">
-                      <Button variant="outline" onClick={() => setDetailsRow(r)}>
+                      <Button type="button" variant="outline" onClick={() => setDetailsRow(r)}>
                         Подробнее
                       </Button>
                     </td>
@@ -179,11 +167,6 @@ function ReportsWarehouse() {
                 ))}
               </tbody>
             </table>
-            <div className="mt-6">
-              <Button variant="outline" onClick={handleExport} disabled={!rows.length || loading}>
-                Экспорт в Excel
-              </Button>
-            </div>
 
             {detailsRow && (
               <Dialog open onOpenChange={() => setDetailsRow(null)}>
@@ -197,12 +180,25 @@ function ReportsWarehouse() {
                     ))}
                   </div>
                   <DialogFooter>
-                    <Button onClick={() => setDetailsRow(null)}>Закрыть</Button>
+                    <Button type="button" onClick={() => setDetailsRow(null)}>Закрыть</Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
             )}
           </>
+        )}
+
+        {safeRows.length > 0 && (
+          <div className="mt-6">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleExport}
+              disabled={!safeRows.length || loading}
+            >
+              Экспорт в Excel
+            </Button>
+          </div>
         )}
       </CardContent>
     </Card>
