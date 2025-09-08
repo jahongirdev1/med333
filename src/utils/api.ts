@@ -403,7 +403,7 @@ class ApiService {
     return res.data?.data ?? [];
   }
 
-  getWarehouseDispatches(params: { date_from?: string; date_to?: string }) {
+  async getWarehouseDispatches(params: { date_from?: string; date_to?: string }) {
     const qs = new URLSearchParams();
     if (params.date_from) qs.set('date_from', params.date_from);
     if (params.date_to) qs.set('date_to', params.date_to);
@@ -449,7 +449,7 @@ class ApiService {
     window.URL.revokeObjectURL(url);
   }
 
-  exportWarehouseDispatchesXlsx(params: { date_from?: string; date_to?: string }) {
+  async exportWarehouseDispatchesXlsx(params: { date_from?: string; date_to?: string }) {
     const qs = new URLSearchParams();
     if (params.date_from) qs.set('date_from', params.date_from);
     if (params.date_to) qs.set('date_to', params.date_to);
