@@ -1994,6 +1994,39 @@ def build_wh_arrivals_json(
     return {"data": json_rows}
 
 
+def build_wh_dispatches_json(
+    db, start: datetime | None, end: datetime | None
+) -> dict:
+    q = db.query(DBShipment)
+
+    date_col = getattr(DBShipment, "created_at")
+    date_attr = date_col.key
+
+    if start:
+        q = q.filter(date_col >= start)
+    if end:
+        q = q.filter(date_col <= end)
+
+    rows = q.order_by(date_col.asc()).all()
+
+    json_rows: list[dict] = []
+    for r in rows:
+        items = (
+            db.query(DBShipmentItem)
+            .filter(DBShipmentItem.shipment_id == r.id)
+            .all()
+        )
+        items_data = [
+            {"type": it.item_type, "name": it.item_name, "quantity": it.quantity}
+            for it in items
+        ]
+        dt = getattr(r, date_attr, None)
+        dt_iso = dt.isoformat() if dt else ""
+        json_rows.append({"id": r.id, "datetime": dt_iso, "items": items_data})
+
+    return {"data": json_rows}
+
+
 @app.get("/admin/warehouse/reports/stock")
 def admin_warehouse_stock(
     date_from: str | None = Query(None),
@@ -2123,6 +2156,44 @@ def admin_wh_arrivals(
             return payload
     except Exception as e:
         logger.exception("admin_wh_arrivals error")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/admin/warehouse/reports/dispatches")
+def admin_wh_dispatches(
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    export: Optional[str] = Query(None),
+    format: Optional[str] = Query(None),
+):
+    try:
+        start = _parse_ymd(date_from)
+        end = _parse_ymd(date_to, end_of_day=True)
+        with SessionLocal() as db:
+            payload = build_wh_dispatches_json(db, start, end)
+            if _wants_excel(export, format):
+                rows: list[list[str]] = []
+                for r in payload.get("data", []):
+                    items = "; ".join(
+                        f"{i.get('name','')} — {i.get('quantity','')}" for i in r.get("items", [])
+                    )
+                    rows.append([_to_almaty_str(r.get("datetime", "")), items])
+                content = _render_xlsx(
+                    ["Дата и время", "Отправлено (наименование — кол-во)"],
+                    rows,
+                    "Отправки",
+                )
+                safe_to = date_to or datetime.now(ALMATY_TZ).strftime("%Y-%m-%d")
+                return Response(
+                    content,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers=_ascii_download_headers(
+                        f"warehouse_dispatches_{safe_to}.xlsx"
+                    ),
+                )
+            return payload
+    except Exception as e:
+        logger.exception("admin_wh_dispatches error")
         raise HTTPException(status_code=400, detail=str(e))
 
 
