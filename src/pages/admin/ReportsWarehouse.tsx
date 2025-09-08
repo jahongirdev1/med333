@@ -5,15 +5,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { apiService } from '@/utils/api';
 import { formatDateTimeAlmaty } from '@/utils/datetime';
 
 const ReportsWarehouse: React.FC = () => {
-  const [type, setType] = useState<string>('');
+  const [type, setType] = useState<'arrivals' | 'stock' | 'dispatches'>('arrivals');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [rows, setRows] = useState<any[]>([]);
+  const [detailsRow, setDetailsRow] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
@@ -27,6 +29,9 @@ const ReportsWarehouse: React.FC = () => {
       if (type === 'stock') {
         const res = await apiService.getWarehouseStock({ date_from: dateFrom, date_to: dateTo });
         setRows(res.data?.data ?? []);
+      } else if (type === 'dispatches') {
+        const res = await apiService.getWarehouseDispatches({ date_from: dateFrom, date_to: dateTo });
+        setRows(res.data ?? []);
       } else {
         const data = await apiService.getWarehouseArrivals({ dateFrom, dateTo });
         setRows(data);
@@ -46,6 +51,8 @@ const ReportsWarehouse: React.FC = () => {
     try {
       if (type === 'stock') {
         await apiService.exportWarehouseStockXlsx({ date_from: dateFrom, date_to: dateTo });
+      } else if (type === 'dispatches') {
+        await apiService.exportWarehouseDispatchesXlsx({ date_from: dateFrom, date_to: dateTo });
       } else {
         await apiService.exportWarehouseArrivalsXlsx({ dateFrom, dateTo });
       }
@@ -76,6 +83,55 @@ const ReportsWarehouse: React.FC = () => {
             ))}
           </TableBody>
         </Table>
+      );
+    }
+
+    if (type === 'dispatches') {
+      return (
+        <>
+          <Table className="mt-4">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Дата и время</TableHead>
+                <TableHead>Отправлено</TableHead>
+                <TableHead className="text-center">Действия</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r: any) => (
+                <TableRow key={r.id}>
+                  <TableCell>{formatDateTimeAlmaty(r.datetime)}</TableCell>
+                  <TableCell>
+                    {(r.items || []).map((i: any) => `${i.name} — ${i.quantity}`).join('; ')}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <Button variant="outline" onClick={() => setDetailsRow(r)}>
+                      Подробнее
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+
+          {detailsRow && (
+            <Dialog open onOpenChange={() => setDetailsRow(null)}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Состав отправки</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-2">
+                  {(detailsRow.items || []).map((i: any, idx: number) => (
+                    <div key={idx}>{i.name} — {i.quantity}</div>
+                  ))}
+                </div>
+                <DialogFooter>
+                  <Button onClick={() => setDetailsRow(null)}>Закрыть</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          )}
+        </>
       );
     }
 
@@ -121,6 +177,7 @@ const ReportsWarehouse: React.FC = () => {
               <SelectContent>
                 <SelectItem value="stock">Остатки</SelectItem>
                 <SelectItem value="arrivals">Поступления</SelectItem>
+                <SelectItem value="dispatches">Отправки</SelectItem>
               </SelectContent>
             </Select>
           </div>
