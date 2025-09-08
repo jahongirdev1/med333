@@ -1786,6 +1786,28 @@ def _ascii_headers(filename_ascii: str) -> dict[str, str]:
     return {"Content-Disposition": f"attachment; filename={filename_ascii}"}
 
 
+def _parse_ymd(s: str | None, end_of_day: bool = False) -> datetime | None:
+    if not s:
+        return None
+    s = s.strip()
+    try:
+        d = datetime.strptime(s, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError(f"Bad date format: {s}") from exc
+    if end_of_day:
+        return datetime(
+            d.year,
+            d.month,
+            d.day,
+            23,
+            59,
+            59,
+            999999,
+            tzinfo=timezone.utc,
+        )
+    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+
+
 def _wants_excel(export: str | None, format_: str | None) -> bool:
     e, f = (export or "").lower(), (format_ or "").lower()
     return e in {"excel", "xlsx"} or f in {"excel", "xlsx"}
@@ -1817,8 +1839,11 @@ def render_xlsx(headers: list[str], rows: list[list[str]], sheet_name: str = "Sh
     return _render_xlsx(headers, rows, sheet_name)
 
 
-def ascii_download_headers(filename_ascii: str) -> dict[str, str]:
+def _ascii_download_headers(filename_ascii: str) -> dict[str, str]:
     return _ascii_headers(filename_ascii)
+
+# backward compatibility
+ascii_download_headers = _ascii_download_headers
 
 
 def pick_arrival_branch_col(Arrival):
@@ -1923,40 +1948,47 @@ def build_wh_stock_json(
 
 
 def build_wh_arrivals_json(
-    db, branch_id: str, date_from: str | None, date_to: str | None
+    db, start: datetime | None, end: datetime | None
 ) -> dict:
     q = db.query(DBArrival)
-    col = pick_arrival_branch_col(DBArrival)
-    q = q.filter(col == branch_id)
-    if date_from:
-        start = datetime.fromisoformat(date_from)
-        q = q.filter(DBArrival.date >= start)
-    if date_to:
-        end = datetime.fromisoformat(date_to)
-        q = q.filter(DBArrival.date <= end)
 
-    rows = q.order_by(DBArrival.date.asc()).all()
-    name_map = {(r.item_type, r.item_id): r.item_name for r in rows}
+    date_col = getattr(DBArrival, "created_at", None)
+    if date_col is None:
+        date_col = getattr(DBArrival, "date")
+    date_attr = date_col.key
 
-    med_ids = [iid for (t, iid) in name_map if t == "medicine"]
-    if med_ids:
-        for m in db.query(DBMedicine.id, DBMedicine.name).filter(
-            DBMedicine.id.in_(med_ids)
-        ):
-            name_map[("medicine", m.id)] = m.name
-    dev_ids = [iid for (t, iid) in name_map if t == "medical_device"]
-    if dev_ids:
-        for d in db.query(DBMedicalDevice.id, DBMedicalDevice.name).filter(
-            DBMedicalDevice.id.in_(dev_ids)
-        ):
-            name_map[("medical_device", d.id)] = d.name
+    if start:
+        q = q.filter(date_col >= start)
+    if end:
+        q = q.filter(date_col <= end)
+
+    if hasattr(DBArrival, "items"):
+        q = q.options(joinedload(DBArrival.items))
+
+    rows = q.order_by(date_col.asc()).all()
 
     json_rows: list[dict] = []
     for r in rows:
-        dt_iso = r.date.isoformat() if r.date else ""
-        name = name_map.get((r.item_type, r.item_id), r.item_name)
-        item = {"type": r.item_type, "name": name, "quantity": r.quantity}
-        json_rows.append({"id": r.id, "datetime": dt_iso, "items": [item]})
+        dt = getattr(r, date_attr, None)
+        dt_iso = dt.isoformat() if dt else ""
+        if hasattr(r, "items"):
+            items = [
+                {
+                    "type": it.item_type,
+                    "name": it.item_name,
+                    "quantity": it.quantity,
+                }
+                for it in (r.items or [])
+            ]
+        else:
+            items = [
+                {
+                    "type": getattr(r, "item_type", ""),
+                    "name": getattr(r, "item_name", ""),
+                    "quantity": getattr(r, "quantity", 0),
+                }
+            ]
+        json_rows.append({"id": r.id, "datetime": dt_iso, "items": items})
 
     return {"data": json_rows}
 
@@ -2004,28 +2036,33 @@ def admin_wh_arrivals(
     export: Optional[str] = Query(None),
     format: Optional[str] = Query(None),
 ):
-    with SessionLocal() as db:
-        bid = branch_id or _get_main_branch_id(db)
-        payload = build_wh_arrivals_json(db, bid, date_from, date_to)
-        if _wants_excel(export, format):
-            rows: list[list[str]] = []
-            for r in payload.get("data", []):
-                items = "; ".join(
-                    f"{i.get('name','')} — {i.get('quantity','')}"
-                    for i in r.get("items", [])
+    try:
+        start = _parse_ymd(date_from)
+        end = _parse_ymd(date_to, end_of_day=True)
+        with SessionLocal() as db:
+            payload = build_wh_arrivals_json(db, start, end)
+            if _wants_excel(export, format):
+                rows: list[list[str]] = []
+                for r in payload.get("data", []):
+                    items = "; ".join(
+                        f"{i.get('name','')} — {i.get('quantity','')}" for i in r.get("items", [])
+                    )
+                    rows.append([_to_almaty_str(r.get("datetime", "")), items])
+                content = _render_xlsx(
+                    ["Дата и время", "Поступило (наименование — кол-во)"],
+                    rows,
+                    "Поступления",
                 )
-                rows.append([_to_almaty_str(r.get("datetime", "")), items])
-            content = _render_xlsx(
-                ["Дата и время", "Поступило (наименование — кол-во)"],
-                rows,
-                "Поступления",
-            )
-            return Response(
-                content,
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers=_ascii_headers("warehouse_arrivals.xlsx"),
-            )
-        return payload
+                safe_to = date_to or datetime.now(ALMATY_TZ).strftime("%Y-%m-%d")
+                return Response(
+                    content,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers=_ascii_download_headers(f"warehouse_arrivals_{safe_to}.xlsx"),
+                )
+            return payload
+    except Exception as e:
+        logger.exception("admin_wh_arrivals error")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/reports/stock")
