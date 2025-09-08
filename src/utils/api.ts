@@ -423,6 +423,31 @@ class ApiService {
     window.URL.revokeObjectURL(url);
   }
 
+  // Warehouse — Dispatches JSON
+  async getWarehouseDispatches(params: { date_from?: string; date_to?: string }) {
+    const qs = new URLSearchParams();
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    return this.request<any>(`/admin/warehouse/reports/dispatches?${qs.toString()}`);
+  }
+
+  // Warehouse — Dispatches Excel
+  async exportWarehouseDispatchesXlsx(params: { date_from?: string; date_to?: string }) {
+    const qs = new URLSearchParams();
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    const url = `${API_BASE_URL}/admin/warehouse/reports/dispatches?${qs.toString()}&export=excel`;
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `warehouse_dispatches_${params.date_to || 'today'}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   // Categories (updated with type parameter)
   async getCategoriesByType(type?: string) {
     let url = '/categories';

@@ -210,12 +210,20 @@ def ensure_arrivals_schema():
 app = FastAPI(title="Warehouse Management System")
 
 # CORS middleware
+origins = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 # Create tables on startup
@@ -1992,6 +2000,100 @@ def build_wh_arrivals_json(
         json_rows.append({"id": r.id, "datetime": dt_iso, "items": items})
 
     return {"data": json_rows}
+
+
+@app.get("/admin/warehouse/reports/dispatches")
+def admin_warehouse_dispatches(
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    export: str | None = Query(None),
+    format: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Warehouse dispatches (Отправки). No branch filter here (main warehouse only).
+    JSON by default; Excel when export=excel/xlsx.
+    Response JSON:
+    { "data": [ { "id": "...", "datetime": "...", "items": [ { "type": "...", "name": "...", "quantity": N }, ... ] }, ... ] }
+    """
+    try:
+        start = _parse_ymd(date_from)
+        end = _parse_ymd(date_to, end_of_day=True)
+
+        q_hdr = select(DBShipment).order_by(DBShipment.created_at.asc())
+        if start:
+            q_hdr = q_hdr.where(DBShipment.created_at >= start)
+        if end:
+            q_hdr = q_hdr.where(DBShipment.created_at <= end)
+
+        headers = db.execute(q_hdr).scalars().all()
+
+        data: list[dict] = []
+        for h in headers:
+            items_q = select(DBShipmentItem).where(DBShipmentItem.shipment_id == h.id)
+            items = db.execute(items_q).scalars().all()
+
+            out_items = []
+            for it in items:
+                item_type = getattr(it, "item_type")
+                item_id = getattr(it, "item_id")
+                qty = int(getattr(it, "quantity") or 0)
+
+                name = None
+                if item_type == "medicine":
+                    m = db.get(DBMedicine, item_id)
+                    name = getattr(m, "name", None) if m else None
+                elif item_type == "medical_device":
+                    md = db.get(DBMedicalDevice, item_id)
+                    name = getattr(md, "name", None) if md else None
+
+                out_items.append(
+                    {
+                        "type": item_type,
+                        "name": name or getattr(it, "item_name", None) or "—",
+                        "quantity": qty,
+                    }
+                )
+
+            data.append(
+                {
+                    "id": str(getattr(h, "id")),
+                    "datetime": getattr(h, "created_at"),
+                    "items": out_items,
+                }
+            )
+
+        if ((export or "").lower() in {"excel", "xlsx"}) or (
+            (format or "").lower() in {"excel", "xlsx"}
+        ):
+            rows = []
+            for r in data:
+                items_human = "; ".join(
+                    f'{i["name"]} — {i["quantity"]}' for i in r["items"]
+                )
+                rows.append([
+                    _to_almaty_str(r["datetime"]),
+                    items_human,
+                ])
+
+            content = _render_xlsx(
+                headers=["Дата и время", "Отправлено (наименование — кол-во)"],
+                rows=rows,
+                sheet_name="Отправки",
+            )
+            safe_to = date_to or "today"
+            return Response(
+                content,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers=_ascii_download_headers(
+                    f"warehouse_dispatches_{safe_to}.xlsx"
+                ),
+            )
+
+        return {"data": data}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/admin/warehouse/reports/stock")
