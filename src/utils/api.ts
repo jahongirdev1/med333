@@ -66,6 +66,25 @@ class ApiService {
     return { error: lastErr ?? 'Unknown error' };
   }
 
+  async download(url: string) {
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition');
+    let fileName = 'report.xlsx';
+    if (disposition) {
+      const match = /filename="?([^";]+)"?/i.exec(disposition);
+      if (match && match[1]) fileName = match[1];
+    }
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+  }
+
   // Auth
   async login(credentials: LoginData) {
     return this.request<any>('/auth/login', {
@@ -384,6 +403,13 @@ class ApiService {
     return res.data?.data ?? [];
   }
 
+  getWarehouseDispatches(params: { date_from?: string; date_to?: string }) {
+    const qs = new URLSearchParams();
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    return this.request<{ data: any[] }>(`/admin/warehouse/reports/dispatches?${qs.toString()}`);
+  }
+
   async exportWarehouseStockXlsx(params: { date_from?: string; date_to?: string }) {
     const qs = new URLSearchParams();
     if (params.date_from) qs.set('date_from', params.date_from);
@@ -421,6 +447,14 @@ class ApiService {
     link.click();
     link.remove();
     window.URL.revokeObjectURL(url);
+  }
+
+  exportWarehouseDispatchesXlsx(params: { date_from?: string; date_to?: string }) {
+    const qs = new URLSearchParams();
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    const url = `${API_BASE_URL}/admin/warehouse/reports/dispatches?${qs.toString()}&export=excel`;
+    return this.download(url);
   }
 
   // Categories (updated with type parameter)

@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { apiService } from '@/utils/api';
 import { formatDateTimeAlmaty } from '@/utils/datetime';
@@ -15,6 +16,8 @@ const ReportsWarehouse: React.FC = () => {
   const [dateTo, setDateTo] = useState('');
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const [selectedRow, setSelectedRow] = useState<any | null>(null);
   const { toast } = useToast();
 
   const generateReport = async () => {
@@ -27,9 +30,12 @@ const ReportsWarehouse: React.FC = () => {
       if (type === 'stock') {
         const res = await apiService.getWarehouseStock({ date_from: dateFrom, date_to: dateTo });
         setRows(res.data?.data ?? []);
-      } else {
+      } else if (type === 'arrivals') {
         const data = await apiService.getWarehouseArrivals({ dateFrom, dateTo });
         setRows(data);
+      } else {
+        const res = await apiService.getWarehouseDispatches({ date_from: dateFrom, date_to: dateTo });
+        setRows(res.data?.data ?? []);
       }
     } catch {
       toast({ title: 'Ошибка получения отчёта', variant: 'destructive' });
@@ -46,8 +52,10 @@ const ReportsWarehouse: React.FC = () => {
     try {
       if (type === 'stock') {
         await apiService.exportWarehouseStockXlsx({ date_from: dateFrom, date_to: dateTo });
-      } else {
+      } else if (type === 'arrivals') {
         await apiService.exportWarehouseArrivalsXlsx({ dateFrom, dateTo });
+      } else {
+        await apiService.exportWarehouseDispatchesXlsx({ date_from: dateFrom, date_to: dateTo });
       }
     } catch {
       toast({ title: 'Ошибка экспорта', variant: 'destructive' });
@@ -72,6 +80,46 @@ const ReportsWarehouse: React.FC = () => {
                 <TableCell>{row.name}</TableCell>
                 <TableCell>{row.category}</TableCell>
                 <TableCell>{row.quantity}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      );
+    }
+
+    if (type === 'dispatches') {
+      return (
+        <Table className="mt-4">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Дата и время</TableHead>
+              <TableHead>Отправлено</TableHead>
+              <TableHead>Действия</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row, idx) => (
+              <TableRow key={idx}>
+                <TableCell>
+                  {formatDateTimeAlmaty(row.datetime || row.date || row.created_at)}
+                </TableCell>
+                <TableCell>
+                  {(row.items || [])
+                    .map((i: any) => `${i.name ?? '—'} — ${i.quantity ?? i.qty}`)
+                    .join('; ')}
+                </TableCell>
+                <TableCell>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setSelectedRow(row);
+                      setShowDetails(true);
+                    }}
+                  >
+                    Подробнее
+                  </Button>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -121,6 +169,7 @@ const ReportsWarehouse: React.FC = () => {
               <SelectContent>
                 <SelectItem value="stock">Остатки</SelectItem>
                 <SelectItem value="arrivals">Поступления</SelectItem>
+                <SelectItem value="dispatches">Отправки</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -137,8 +186,22 @@ const ReportsWarehouse: React.FC = () => {
           </div>
         </div>
         {renderTable()}
+        <Dialog open={showDetails} onOpenChange={setShowDetails}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Детали отправки</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-2">
+              {(selectedRow?.items || []).map((i: any, idx: number) => (
+                <p key={idx}>{i.name ?? '—'} — {i.quantity ?? i.qty}</p>
+              ))}
+            </div>
+          </DialogContent>
+        </Dialog>
         <div className="mt-6">
-          <Button variant="outline" onClick={handleExport}>Экспорт в Excel</Button>
+          <Button variant="outline" onClick={handleExport} disabled={rows.length === 0}>
+            Экспорт в Excel
+          </Button>
         </div>
       </CardContent>
     </Card>
