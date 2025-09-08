@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { apiService } from '@/utils/api';
+import { formatDateTimeAlmaty } from '@/utils/datetime';
 
 const ReportsWarehouse: React.FC = () => {
   const [type, setType] = useState<string>('');
@@ -24,8 +25,8 @@ const ReportsWarehouse: React.FC = () => {
     setLoading(true);
     try {
       if (type === 'stock') {
-        const data = await apiService.getWarehouseStock({ dateFrom, dateTo });
-        setRows(data);
+        const res = await apiService.getWarehouseStock({ date_from: dateFrom, date_to: dateTo });
+        setRows(res.data?.data ?? []);
       } else {
         const data = await apiService.getWarehouseArrivals({ dateFrom, dateTo });
         setRows(data);
@@ -37,14 +38,14 @@ const ReportsWarehouse: React.FC = () => {
     }
   };
 
-  const exportReport = async () => {
+  const handleExport = async () => {
     if (!type) {
       toast({ title: 'Выберите тип отчёта', variant: 'destructive' });
       return;
     }
     try {
       if (type === 'stock') {
-        await apiService.exportWarehouseStockXlsx({ dateFrom, dateTo });
+        await apiService.exportWarehouseStockXlsx({ date_from: dateFrom, date_to: dateTo });
       } else {
         await apiService.exportWarehouseArrivalsXlsx({ dateFrom, dateTo });
       }
@@ -89,9 +90,13 @@ const ReportsWarehouse: React.FC = () => {
         <TableBody>
           {rows.map((row, idx) => (
             <TableRow key={idx}>
-              <TableCell>{row.datetime || row.date || row.created_at}</TableCell>
               <TableCell>
-                {(row.items || []).map((i: any) => `${i.name} — ${i.quantity ?? i.qty}`).join('; ')}
+                {formatDateTimeAlmaty(row.datetime || row.date || row.created_at)}
+              </TableCell>
+              <TableCell>
+                {(row.items || [])
+                  .map((i: any) => `${i.name ?? '—'} — ${i.quantity ?? i.qty}`)
+                  .join(', ')}
               </TableCell>
             </TableRow>
           ))}
@@ -127,12 +132,14 @@ const ReportsWarehouse: React.FC = () => {
             <Label>Дата по</Label>
             <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
           </div>
-          <div className="flex items-end gap-2">
+          <div className="flex items-end">
             <Button onClick={generateReport} disabled={loading}>Сгенерировать отчёт</Button>
-            <Button variant="outline" onClick={exportReport}>Экспорт в Excel</Button>
           </div>
         </div>
         {renderTable()}
+        <div className="mt-6">
+          <Button variant="outline" onClick={handleExport}>Экспорт в Excel</Button>
+        </div>
       </CardContent>
     </Card>
   );
