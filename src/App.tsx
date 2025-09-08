@@ -17,6 +17,8 @@ import MedicalDevices from "@/pages/admin/MedicalDevices";
 import Categories from "@/pages/admin/Categories";
 import Shipments from "@/pages/admin/Shipments";
 import Reports from "@/pages/admin/Reports";
+import ReportsWarehouse from "@/pages/admin/ReportsWarehouse";
+import ReportsBranches from "@/pages/admin/ReportsBranches";
 import AdminEmployees from "@/pages/admin/AdminEmployees";
 import AdminReports from "@/pages/admin/AdminReports";
 import AdminPatients from "@/pages/admin/AdminPatients";
@@ -90,6 +92,8 @@ const App = () => {
             <Route path="/admin/medical-devices-categories" element={<ProtectedRoute requiredRole="admin"><MedicalDevicesCategories /></ProtectedRoute>} />
             <Route path="/admin/shipments" element={<ProtectedRoute requiredRole="admin"><Shipments /></ProtectedRoute>} />
             <Route path="/admin/reports" element={<ProtectedRoute requiredRole="admin"><Reports /></ProtectedRoute>} />
+            <Route path="/admin/reports/warehouse" element={<ProtectedRoute requiredRole="admin"><ReportsWarehouse /></ProtectedRoute>} />
+            <Route path="/admin/reports/branches" element={<ProtectedRoute requiredRole="admin"><ReportsBranches /></ProtectedRoute>} />
             <Route path="/admin/analytics" element={<ProtectedRoute requiredRole="admin"><Analytics /></ProtectedRoute>} />
             <Route path="/admin/calendar" element={<ProtectedRoute requiredRole="admin"><AdminCalendar /></ProtectedRoute>} />
             <Route path="/admin/arrivals" element={<ProtectedRoute requiredRole="admin"><AdminArrivals /></ProtectedRoute>} />
