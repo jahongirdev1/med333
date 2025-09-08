@@ -55,6 +55,7 @@ except ImportError:  # pragma: no cover
     get_column_letter = None
 
 logger = logging.getLogger(__name__)
+log = logging.getLogger("reports")
 
 ALMATY_TZ = ZoneInfo("Asia/Almaty")
 MAIN_BRANCH_ID = None
@@ -1994,37 +1995,97 @@ def build_wh_arrivals_json(
 
 
 @app.get("/admin/warehouse/reports/stock")
-def admin_wh_stock(
-    request: Request,
-    branch_id: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
-    export: Optional[str] = Query(None),
-    format: Optional[str] = Query(None),
+def admin_warehouse_stock(
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    export: str | None = Query(None),
+    format: str | None = Query(None),
+    db: Session = Depends(get_db),
 ):
-    with SessionLocal() as db:
-        bid = branch_id or _get_main_branch_id(db)
-        payload = build_wh_stock_json(db, bid, date_from, date_to)
-        if _wants_excel(export, format):
-            rows = [
-                [
-                    r.get("name", ""),
-                    r.get("category", ""),
-                    r.get("quantity", 0),
-                ]
-                for r in payload.get("data", [])
-            ]
+    """
+    Warehouse stock report (no branches involved):
+    Sum arrivals by (item_type, item_id) within the selected period.
+    JSON by default; if export=excel|xlsx — return an XLSX download.
+    """
+    try:
+        start = _parse_ymd(date_from)
+        end = _parse_ymd(date_to, end_of_day=True)
+
+        date_col = getattr(DBArrival, "created_at", None)
+        if date_col is None:
+            date_col = getattr(DBArrival, "date")
+
+        q = (
+            select(
+                getattr(DBArrival, "item_type").label("item_type"),
+                getattr(DBArrival, "item_id").label("item_id"),
+                func.coalesce(func.sum(getattr(DBArrival, "quantity")), 0).label("qty"),
+            ).group_by(getattr(DBArrival, "item_type"), getattr(DBArrival, "item_id"))
+        )
+
+        if start:
+            q = q.where(date_col >= start)
+        if end:
+            q = q.where(date_col <= end)
+
+        rows = db.execute(q).all()
+
+        result = []
+        for item_type, item_id, qty in rows:
+            if not qty or qty <= 0:
+                continue
+
+            name = None
+            category = None
+
+            if item_type == "medicine":
+                m = db.get(DBMedicine, item_id)
+                if m:
+                    name = getattr(m, "name", None)
+                    cat_id = getattr(m, "category_id", None)
+                    if cat_id:
+                        cat = db.get(DBCategory, cat_id)
+                        category = getattr(cat, "name", None)
+            elif item_type == "medical_device":
+                md = db.get(DBMedicalDevice, item_id)
+                if md:
+                    name = getattr(md, "name", None)
+                    cat_id = getattr(md, "category_id", None)
+                    if cat_id:
+                        cat = db.get(DBCategory, cat_id)
+                        category = getattr(cat, "name", None)
+
+            result.append(
+                {
+                    "name": name or "-",
+                    "category": category or "—",
+                    "quantity": int(qty),
+                    "item_type": item_type,
+                    "item_id": str(item_id),
+                }
+            )
+
+        if ((export or "").lower() in {"excel", "xlsx"}) or (
+            (format or "").lower() in {"excel", "xlsx"}
+        ):
+            rows_x = [[r["name"], r["category"], r["quantity"]] for r in result]
             content = _render_xlsx(
-                ["Название", "Категория", "Количество"],
-                rows,
+                ["Наименование", "Категория", "Количество"],
+                rows_x,
                 "Остатки",
             )
+            safe_to = date_to or "today"
             return Response(
                 content,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers=_ascii_headers("warehouse_stock.xlsx"),
+                headers=_ascii_download_headers(f"warehouse_stock_{safe_to}.xlsx"),
             )
-        return payload
+
+        return {"data": result}
+
+    except Exception as e:
+        log.exception("Warehouse stock report failed")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/admin/warehouse/reports/arrivals")

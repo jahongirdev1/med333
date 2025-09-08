@@ -369,12 +369,11 @@ class ApiService {
   }
 
   // Warehouse reports
-  async getWarehouseStock(params: { dateFrom?: string; dateTo?: string }) {
+  async getWarehouseStock(params: { date_from?: string; date_to?: string }) {
     const qs = new URLSearchParams();
-    if (params.dateFrom) qs.set('date_from', params.dateFrom);
-    if (params.dateTo) qs.set('date_to', params.dateTo);
-    const res = await this.request<any>(`/admin/warehouse/reports/stock?${qs.toString()}`);
-    return res.data?.data ?? [];
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    return this.request<any>(`/admin/warehouse/reports/stock?${qs.toString()}`);
   }
 
   async getWarehouseArrivals(params: { dateFrom?: string; dateTo?: string }) {
@@ -385,27 +384,20 @@ class ApiService {
     return res.data?.data ?? [];
   }
 
-  async exportWarehouseStockXlsx(params: { dateFrom?: string; dateTo?: string }) {
+  async exportWarehouseStockXlsx(params: { date_from?: string; date_to?: string }) {
     const qs = new URLSearchParams();
-    if (params.dateFrom) qs.set('date_from', params.dateFrom);
-    if (params.dateTo) qs.set('date_to', params.dateTo);
-    qs.set('export', 'excel');
-    const response = await fetch(`${API_BASE_URL}/admin/warehouse/reports/stock?${qs.toString()}`);
-    const blob = await response.blob();
-    const disposition = response.headers.get('content-disposition');
-    let fileName = 'report.xlsx';
-    if (disposition) {
-      const match = /filename="?([^";]+)"?/i.exec(disposition);
-      if (match && match[1]) fileName = match[1];
-    }
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    const url = `${API_BASE_URL}/admin/warehouse/reports/stock?${qs.toString()}&export=excel`;
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `warehouse_stock_${params.date_to || 'today'}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   async exportWarehouseArrivalsXlsx(params: { dateFrom?: string; dateTo?: string }) {
