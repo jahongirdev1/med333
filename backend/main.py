@@ -57,6 +57,7 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 ALMATY_TZ = ZoneInfo("Asia/Almaty")
+MAIN_BRANCH_ID = None
 
 
 def to_almaty(dt: datetime | str | None) -> str:
@@ -1600,7 +1601,7 @@ async def get_dispensings_report(
 
     result = {"data": json_rows}
 
-    if _wants_excel(request, export, format):
+    if _wants_excel(export, format):
         rows = []
         for r in result.get("data", []):
             items_list = r.get("items", []) or []
@@ -1631,7 +1632,7 @@ async def get_dispensings_report(
         return Response(
             content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers=_ascii_download_headers(
+            headers=_ascii_headers(
                 f"dispensings_report_{safe_to}.xlsx"
             ),
         )
@@ -1695,7 +1696,7 @@ async def get_arrivals_report(
         branch_id=branch_id, date_from=date_from, date_to=date_to, db=db
     )
 
-    if _wants_excel(request, export, format):
+    if _wants_excel(export, format):
         rows: list[list[str]] = []
         for r in result.get("data", []):
             items_list = r.get("items", []) or []
@@ -1720,7 +1721,7 @@ async def get_arrivals_report(
         return Response(
             content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers=_ascii_download_headers(
+            headers=_ascii_headers(
                 f"arrivals_report_{safe_to}.xlsx"
             ),
         )
@@ -1781,13 +1782,30 @@ def _render_xlsx(headers: list[str], rows: list[list[str]], sheet_name: str = "S
     return bio.getvalue()
 
 
-def _ascii_download_headers(filename_ascii: str) -> dict[str, str]:
+def _ascii_headers(filename_ascii: str) -> dict[str, str]:
     return {"Content-Disposition": f"attachment; filename={filename_ascii}"}
 
 
-def _wants_excel(request: Request, export: str | None, format_: str | None) -> bool:
-    q = (export or "").lower() or (format_ or "").lower()
-    return q in {"excel", "xlsx"}
+def _wants_excel(export: str | None, format_: str | None) -> bool:
+    e, f = (export or "").lower(), (format_ or "").lower()
+    return e in {"excel", "xlsx"} or f in {"excel", "xlsx"}
+
+
+def _get_main_branch_id(db):
+    global MAIN_BRANCH_ID
+    if MAIN_BRANCH_ID:
+        return MAIN_BRANCH_ID
+    row = db.execute(
+        text(
+            "SELECT id FROM branches WHERE is_main=true ORDER BY created_at ASC LIMIT 1"
+        )
+    ).first()
+    if not row:
+        row = db.execute(
+            text("SELECT id FROM branches ORDER BY created_at ASC LIMIT 1")
+        ).first()
+    MAIN_BRANCH_ID = row[0]
+    return MAIN_BRANCH_ID
 
 
 # Backward compatibility for older callers
@@ -1800,7 +1818,7 @@ def render_xlsx(headers: list[str], rows: list[list[str]], sheet_name: str = "Sh
 
 
 def ascii_download_headers(filename_ascii: str) -> dict[str, str]:
-    return _ascii_download_headers(filename_ascii)
+    return _ascii_headers(filename_ascii)
 
 
 def pick_arrival_branch_col(Arrival):
@@ -1812,6 +1830,202 @@ def pick_arrival_branch_col(Arrival):
             rel = getattr(Arrival, name)
             return rel.id
     raise RuntimeError("Arrival: no branch column found")
+
+
+def build_wh_stock_json(
+    db, branch_id: str, date_from: str | None, date_to: str | None
+) -> dict:
+    sql_current = """
+        SELECT 'medicine' AS item_type, m.id AS item_id, m.name AS name,
+               COALESCE(c.name, '—') AS category, m.quantity AS quantity
+        FROM medicines m
+        LEFT JOIN categories c ON c.id = m.category_id
+        WHERE m.branch_id = :b AND m.quantity > 0
+        UNION ALL
+        SELECT 'medical_device' AS item_type, d.id AS item_id, d.name AS name,
+               COALESCE(c.name, '—') AS category, d.quantity AS quantity
+        FROM medical_devices d
+        LEFT JOIN categories c ON c.id = d.category_id
+        WHERE d.branch_id = :b AND d.quantity > 0
+        ORDER BY item_type, name
+    """
+
+    start = None
+    end = None
+    if date_from and date_to:
+        start = datetime.fromisoformat(date_from)
+        end = datetime.fromisoformat(date_to)
+
+    if not (start and end):
+        rows = db.execute(text(sql_current), {"b": branch_id}).mappings().all()
+        return {"data": rows}
+
+    arrival_branch_col = pick_col(DBArrival, "to_branch_id", "branch_id", "branch")
+    if not arrival_branch_col:
+        rows = db.execute(text(sql_current), {"b": branch_id}).mappings().all()
+        return {"data": rows}
+
+    sql_dated = f"""
+        WITH start_in AS (
+            SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
+            FROM arrivals
+            WHERE {arrival_branch_col} = :b AND date < :start
+            GROUP BY item_type, item_id
+        ),
+        start_out AS (
+            SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
+            FROM dispensing_items di
+            JOIN dispensing_records dr ON dr.id = di.record_id
+            WHERE dr.branch_id = :b AND dr.date < :start
+            GROUP BY di.item_type, di.item_id
+        ),
+        pin AS (
+            SELECT item_type, item_id, COALESCE(SUM(quantity),0) AS qty
+            FROM arrivals
+            WHERE {arrival_branch_col} = :b AND date >= :start AND date <= :end
+            GROUP BY item_type, item_id
+        ),
+        pout AS (
+            SELECT di.item_type, di.item_id, COALESCE(SUM(di.quantity),0) AS qty
+            FROM dispensing_items di
+            JOIN dispensing_records dr ON dr.id = di.record_id
+            WHERE dr.branch_id = :b AND dr.date >= :start AND dr.date <= :end
+            GROUP BY di.item_type, di.item_id
+        ),
+        base AS (
+            SELECT item_type, item_id, COALESCE(SUM(qty),0) AS quantity
+            FROM (
+                SELECT item_type, item_id, qty FROM start_in
+                UNION ALL
+                SELECT item_type, item_id, -qty FROM start_out
+                UNION ALL
+                SELECT item_type, item_id, qty FROM pin
+                UNION ALL
+                SELECT item_type, item_id, -qty FROM pout
+            ) s
+            GROUP BY item_type, item_id
+        )
+        SELECT b.item_type, b.item_id, b.quantity,
+               COALESCE(m.name, d.name) AS name,
+               COALESCE(mc.name, dc.name, '—') AS category
+        FROM base b
+        LEFT JOIN medicines m ON (b.item_type = 'medicine' AND m.id = b.item_id)
+        LEFT JOIN categories mc ON mc.id = m.category_id
+        LEFT JOIN medical_devices d ON (b.item_type = 'medical_device' AND d.id = b.item_id)
+        LEFT JOIN categories dc ON dc.id = d.category_id
+        WHERE b.quantity > 0
+        ORDER BY b.item_type, name
+    """
+    rows = db.execute(
+        text(sql_dated), {"b": branch_id, "start": start, "end": end}
+    ).mappings().all()
+    return {"data": rows}
+
+
+def build_wh_arrivals_json(
+    db, branch_id: str, date_from: str | None, date_to: str | None
+) -> dict:
+    q = db.query(DBArrival)
+    col = pick_arrival_branch_col(DBArrival)
+    q = q.filter(col == branch_id)
+    if date_from:
+        start = datetime.fromisoformat(date_from)
+        q = q.filter(DBArrival.date >= start)
+    if date_to:
+        end = datetime.fromisoformat(date_to)
+        q = q.filter(DBArrival.date <= end)
+
+    rows = q.order_by(DBArrival.date.asc()).all()
+    name_map = {(r.item_type, r.item_id): r.item_name for r in rows}
+
+    med_ids = [iid for (t, iid) in name_map if t == "medicine"]
+    if med_ids:
+        for m in db.query(DBMedicine.id, DBMedicine.name).filter(
+            DBMedicine.id.in_(med_ids)
+        ):
+            name_map[("medicine", m.id)] = m.name
+    dev_ids = [iid for (t, iid) in name_map if t == "medical_device"]
+    if dev_ids:
+        for d in db.query(DBMedicalDevice.id, DBMedicalDevice.name).filter(
+            DBMedicalDevice.id.in_(dev_ids)
+        ):
+            name_map[("medical_device", d.id)] = d.name
+
+    json_rows: list[dict] = []
+    for r in rows:
+        dt_iso = r.date.isoformat() if r.date else ""
+        name = name_map.get((r.item_type, r.item_id), r.item_name)
+        item = {"type": r.item_type, "name": name, "quantity": r.quantity}
+        json_rows.append({"id": r.id, "datetime": dt_iso, "items": [item]})
+
+    return {"data": json_rows}
+
+
+@app.get("/admin/warehouse/reports/stock")
+def admin_wh_stock(
+    request: Request,
+    branch_id: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    export: Optional[str] = Query(None),
+    format: Optional[str] = Query(None),
+):
+    with SessionLocal() as db:
+        bid = branch_id or _get_main_branch_id(db)
+        payload = build_wh_stock_json(db, bid, date_from, date_to)
+        if _wants_excel(export, format):
+            rows = [
+                [
+                    r.get("name", ""),
+                    r.get("category", ""),
+                    r.get("quantity", 0),
+                ]
+                for r in payload.get("data", [])
+            ]
+            content = _render_xlsx(
+                ["Название", "Категория", "Количество"],
+                rows,
+                "Остатки",
+            )
+            return Response(
+                content,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers=_ascii_headers("warehouse_stock.xlsx"),
+            )
+        return payload
+
+
+@app.get("/admin/warehouse/reports/arrivals")
+def admin_wh_arrivals(
+    request: Request,
+    branch_id: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    export: Optional[str] = Query(None),
+    format: Optional[str] = Query(None),
+):
+    with SessionLocal() as db:
+        bid = branch_id or _get_main_branch_id(db)
+        payload = build_wh_arrivals_json(db, bid, date_from, date_to)
+        if _wants_excel(export, format):
+            rows: list[list[str]] = []
+            for r in payload.get("data", []):
+                items = "; ".join(
+                    f"{i.get('name','')} — {i.get('quantity','')}"
+                    for i in r.get("items", [])
+                )
+                rows.append([_to_almaty_str(r.get("datetime", "")), items])
+            content = _render_xlsx(
+                ["Дата и время", "Поступило (наименование — кол-во)"],
+                rows,
+                "Поступления",
+            )
+            return Response(
+                content,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers=_ascii_headers("warehouse_arrivals.xlsx"),
+            )
+        return payload
 
 
 @app.get("/reports/stock")
