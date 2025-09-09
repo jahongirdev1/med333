@@ -3,6 +3,7 @@ import React, { useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { storage } from '@/utils/storage';
+import GlobalTitleLock from '@/components/GlobalTitleLock';
 import { 
   Home, 
   Package, 
@@ -107,11 +108,17 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const menuItems = currentUser?.role === 'admin' ? adminMenuItems : branchMenuItems;
 
   if (!currentUser) {
-    return <div>{children}</div>;
+    return (
+      <div>
+        <GlobalTitleLock />
+        {children}
+      </div>
+    );
   }
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
+      <GlobalTitleLock />
       {/* Sidebar */}
       <div className={`bg-white shadow-lg transition-all duration-300 ${sidebarOpen ? 'w-64' : 'w-0 overflow-hidden'}`}>
         <div className="p-4 border-b">
