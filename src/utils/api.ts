@@ -1,6 +1,6 @@
 import type { DispensingRow, IncomingRow } from '@/types';
 
-export const API_BASE_URL = 'http://alatau.alerts.kz/api';
+export const API_BASE_URL = 'https://alatau.alerts.kz/api';
 // export const API_BASE_URL = 'http://localhost:8000/api';
 
 interface LoginData {
